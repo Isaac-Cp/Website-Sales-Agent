@@ -1,0 +1,14 @@
+.env
+database.db
+leads.db
+*.db
+screenshots/
+debug/
+maps_error_*.png
+__pycache__/
+*.pyc
+.wdm/
+node_modules/
+dist/
+build/
+*.log
