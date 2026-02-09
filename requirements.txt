@@ -19,3 +19,5 @@ websockets
 capsolver
 google-search-results
 proxycurl-py[asyncio]
+gunicorn
+uvicorn

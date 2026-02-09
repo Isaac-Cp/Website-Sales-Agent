@@ -71,19 +71,32 @@ class Scraper:
                         kwargs['timeout'] = 15
                     return requests.get(url, **kwargs)
 
-            # Driver lookup/install logic...
+            # Driver lookup/install logic (OS-aware)
             import os
+            import sys
             driver_path = None
+            is_windows = sys.platform.startswith("win")
+            os_subdir = "win64" if is_windows else "linux64"
+            
             try:
-                wdm_base = os.path.join(os.path.expanduser("~"), ".wdm", "drivers", "chromedriver", "win64")
+                # 1. Try to find local cached driver
+                wdm_base = os.path.join(os.path.expanduser("~"), ".wdm", "drivers", "chromedriver", os_subdir)
                 if os.path.exists(wdm_base):
+                    # Pick latest version
                     versions = sorted([d for d in os.listdir(wdm_base) if os.path.isdir(os.path.join(wdm_base, d))], reverse=True)
                     for v in versions:
-                        candidates = [
-                            os.path.join(wdm_base, v, "chromedriver.exe"),
-                            os.path.join(wdm_base, v, "chromedriver-win64", "chromedriver.exe"),
-                            os.path.join(wdm_base, v, "chromedriver-win32", "chromedriver.exe")
-                        ]
+                        if is_windows:
+                            candidates = [
+                                os.path.join(wdm_base, v, "chromedriver.exe"),
+                                os.path.join(wdm_base, v, "chromedriver-win64", "chromedriver.exe"),
+                                os.path.join(wdm_base, v, "chromedriver-win32", "chromedriver.exe")
+                            ]
+                        else:
+                            candidates = [
+                                os.path.join(wdm_base, v, "chromedriver"),
+                                os.path.join(wdm_base, v, "chromedriver-linux64", "chromedriver")
+                            ]
+                            
                         for c in candidates:
                             if os.path.exists(c):
                                 driver_path = c
@@ -91,6 +104,7 @@ class Scraper:
                         if driver_path: break
             except: pass
 
+            # 2. Network Fallback
             if not driver_path:
                 try:
                     from webdriver_manager.core.download_manager import WDMDownloadManager
@@ -102,16 +116,21 @@ class Scraper:
                         driver_path = manager.install()
                         break
                     except:
-                        time.sleep(1)
+                        time.sleep(2)
             
             if not driver_path:
-                raise Exception("Failed to install Chrome driver")
+                # Last resort: check PATH or common locations
+                driver_path = "chromedriver" if not is_windows else "chromedriver.exe"
             
             # Initialize Chrome
+            # On Linux (Servers), use_subprocess=True is often required for stability
+            # On Windows, use_subprocess=False avoids WinError 6
+            use_sub = True if not is_windows else False
+            
             driver = uc.Chrome(
                 options=options,
-                driver_executable_path=driver_path,
-                use_subprocess=False,
+                driver_executable_path=driver_path if os.path.exists(driver_path) else None,
+                use_subprocess=use_sub,
                 version_main=None
             )
             
