@@ -24,53 +24,59 @@ class Scraper:
     def get_driver(self):
         """Initialize Chrome driver with robust anti-detection settings."""
         options = uc.ChromeOptions()
-        
-        # Anti-detection settings
+        # Performance & CPU Optimizations
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized")
-        options.add_argument("--disable-web-security")
-        options.add_argument("--disable-features=IsolateOrigins,site-per-process")
-        options.add_argument("--lang=en-US")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-sync")
+        options.add_argument("--disable-default-apps")
+        options.add_argument("--mute-audio")
+        options.add_argument("--disable-logging")
+        options.add_argument("--blink-settings=imagesEnabled=false")
+        options.add_argument("--window-size=1280,720")
+        options.page_load_strategy = 'eager'
         
-        # User agent to appear more human
+        # User agent
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         if self.headless:
             options.add_argument("--headless=new")
         
+        # Profile Preferences (Apply BEFORE initialization)
+        prefs = {
+            "profile.managed_default_content_settings.images": 2, 
+            "profile.default_content_setting_values.notifications": 2,
+            "profile.managed_default_content_settings.stylesheets": 2,
+            "profile.managed_default_content_settings.cookies": 2,
+            "profile.managed_default_content_settings.javascript": 1,
+            "profile.managed_default_content_settings.plugins": 2,
+            "profile.managed_default_content_settings.popups": 2,
+            "profile.managed_default_content_settings.geolocation": 2,
+            "profile.managed_default_content_settings.media_stream": 2,
+            "profile.password_manager_enabled": False,
+            "credentials_enable_service": False,
+        }
+        options.add_experimental_option("prefs", prefs)
+
         try:
-            # Custom HTTP Client to enforce timeout and avoid hangs
+            # Custom HTTP Client for WDM
             class CustomHttpClient:
                 def get(self, url, **kwargs):
                     import requests
-                    # Force timeout
                     if 'timeout' not in kwargs:
                         kwargs['timeout'] = 15
                     return requests.get(url, **kwargs)
 
-            # Use webdriver_manager to get the driver path with retry and timeout
-            driver_path = None
-            
-            # WDM instantiation
-            # Note: WDM structure varies by version. Using robust approach:
-            # Try passing download_manager if possible, or just standard install if not supported widely.
-            # Actually, standard install is failing. Let's try hacking the requests session globally or just retry loop with short timeout?
-            # Retry loop is already there. The issue is .install() hangs inside ONE attempt.
-            # We must use CustomHttpClient if WDM supports it.
-            # Checking traceback: ChromeDriverManager().install() -> self._get_driver_binary_path(self.driver)
-            # WDM seems to standardly support http_client arg in constructor for download manager customization?
-            # Let's try explicit download manager construction:
-            # 1. Try to find local cached driver first (Fastest, avoids network blocking)
+            # Driver lookup/install logic...
             import os
             driver_path = None
             try:
                 wdm_base = os.path.join(os.path.expanduser("~"), ".wdm", "drivers", "chromedriver", "win64")
                 if os.path.exists(wdm_base):
-                    # Sort version dirs, pick latest
                     versions = sorted([d for d in os.listdir(wdm_base) if os.path.isdir(os.path.join(wdm_base, d))], reverse=True)
                     for v in versions:
                         candidates = [
@@ -81,68 +87,38 @@ class Scraper:
                         for c in candidates:
                             if os.path.exists(c):
                                 driver_path = c
-                                print(f"DEBUG: Found cached driver at {driver_path}")
                                 break
-                        if driver_path:
-                            break
-            except Exception as e:
-                print(f"DEBUG: Cache lookup failed: {e}")
+                        if driver_path: break
+            except: pass
 
-            # 2. Network Fallback (if no cache)
             if not driver_path:
                 try:
                     from webdriver_manager.core.download_manager import WDMDownloadManager
-                    http_client = CustomHttpClient()
-                    download_manager = WDMDownloadManager(http_client)
-                    manager = ChromeDriverManager(download_manager=download_manager)
-                except Exception as e:
-                    # Fallback if WDM version differs
+                    manager = ChromeDriverManager(download_manager=WDMDownloadManager(CustomHttpClient()))
+                except:
                     manager = ChromeDriverManager()
-    
                 for attempt in range(3):
                     try:
                         driver_path = manager.install()
                         break
-                    except Exception as e:
-                        print(f"Driver install attempt {attempt+1} failed: {e}")
-                        import time
-                        time.sleep(2)
+                    except:
+                        time.sleep(1)
             
             if not driver_path:
-                raise Exception("Failed to install Chrome driver after 3 attempts")
+                raise Exception("Failed to install Chrome driver")
             
-            # Create driver with proper cleanup handling
-            print("DEBUG: Initializing uc.Chrome...")
-            # On Windows, use_subprocess=True can sometimes cause WinError 6 (handle invalid)
-            # if the environment is restrictive or process management fails.
-            # Setting to False for better compatibility here.
+            # Initialize Chrome
             driver = uc.Chrome(
                 options=options,
                 driver_executable_path=driver_path,
-                use_subprocess=False,  
-                version_main=None  # Auto-detect Chrome version
+                use_subprocess=False,
+                version_main=None
             )
-            print("DEBUG: uc.Chrome initialized.")
             
-            # Performance optimizations
-            options.page_load_strategy = 'eager'
-            prefs = {
-                "profile.managed_default_content_settings.images": 2, 
-                "profile.default_content_setting_values.notifications": 2,
-                "profile.managed_default_content_settings.stylesheets": 2,
-                "profile.managed_default_content_settings.cookies": 2,
-                "profile.managed_default_content_settings.javascript": 1,
-                "profile.managed_default_content_settings.plugins": 1,
-                "profile.managed_default_content_settings.popups": 2,
-                "profile.managed_default_content_settings.geolocation": 2,
-                "profile.managed_default_content_settings.media_stream": 2,
-            }
-            options.add_experimental_option("prefs", prefs)
-            
-            # Set timeouts
+            # Final timeouts
             driver.set_page_load_timeout(30)
-            driver.implicitly_wait(5)
-            print("DEBUG: Driver configured.")
+            driver.implicitly_wait(4)
+            print("DEBUG: Driver initialized with CPU optimizations.")
             
             # Execute anti-detection scripts
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
