@@ -46,6 +46,39 @@ except Exception:
     uvicorn = None
     logfire = None
 
+# --- FastAPI App for Koyeb Health Checks & Monitoring ---
+app = None
+if FastAPI:
+    app = FastAPI(title="Website Sales Agent API")
+
+    @app.get("/")
+    @app.get("/health")
+    def health_check():
+        """Standard health check for Koyeb/PaaS."""
+        return {"status": "healthy", "service": "website-sales-agent"}
+
+    @app.get("/status")
+    def site_status():
+        """Returns the current status and activity count."""
+        try:
+            from database import DataManager
+
+            dm = DataManager()
+            return {"running": True, "daily_actions": dm.count_daily_actions()}
+        except Exception as e:
+            return {"running": True, "error": str(e)}
+
+    @app.websocket("/ws/logs")
+    async def logs(ws: WebSocket):
+        await ws.accept()
+        await ws.send_text("agent: connected")
+        try:
+            while True:
+                await ws.send_text(f"tick:{time.time()}")
+                await asyncio.sleep(1)
+        except Exception:
+            pass
+
 
 
 def parse_args():
@@ -80,6 +113,11 @@ def log(event, **fields):
 
 
 def main():
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except:
+        pass
     print("Starting Sales Automation Agent...")
     
     # 1. Setup
@@ -121,23 +159,9 @@ def main():
         return
     # CrewAI / Tech Search Legacy Blocks Removed
     # Use --tech with main loop instead.
-    if args.serve and FastAPI:
-        app = FastAPI()
-        last_logs = []
-        @app.get("/status")
-        def status():
-            return {"running": True, "daily_actions": DataManager().count_daily_actions()}
-        @app.websocket("/ws/logs")
-        async def logs(ws: WebSocket):
-            await ws.accept()
-            await ws.send_text("agent: connected")
-            try:
-                for _ in range(10):
-                    await ws.send_text(f"tick:{time.time()}")
-                    time.sleep(0.5)
-            except Exception:
-                pass
-        uvicorn.run(app, host="0.0.0.0", port=getattr(config, "FASTAPI_PORT", 8000))
+    if args.serve and app and uvicorn:
+        print(f"Starting API server on port {config.FASTAPI_PORT}...")
+        uvicorn.run(app, host="0.0.0.0", port=config.FASTAPI_PORT)
         return
     if args.signals:
         dm = DataManager()

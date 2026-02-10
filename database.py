@@ -15,17 +15,31 @@ class DataManager:
     """
     def __init__(self, db_file=None):
         self.db_file = db_file if db_file else config.DB_FILE
+        self.is_postgres = bool(getattr(config, "DATABASE_URL", None))
+        self.placeholder = "%s" if self.is_postgres else "?"
         self._init_db()
+
+    def get_connection(self):
+        if self.is_postgres:
+            import psycopg2
+
+            return psycopg2.connect(config.DATABASE_URL)
+        return sqlite3.connect(self.db_file)
 
     def _init_db(self):
         """Initialize the database tables if they doesn't exist."""
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
-        # Leads Table: Stores business info
-        cursor.execute('''
+
+        # Handle SQLite vs Postgres differences
+        auto_inc = "SERIAL" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        primary_key = "id " + auto_inc
+        timestamp_default = "CURRENT_TIMESTAMP"
+
+        # Leads Table
+        cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS leads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {primary_key if self.is_postgres else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
                 business_name TEXT NOT NULL,
                 website TEXT,
                 email TEXT,
@@ -35,57 +49,52 @@ class DataManager:
                 niche TEXT,
                 rating REAL,
                 review_count INTEGER,
-                description TEXT,         -- Business description from Maps
-                sample_reviews TEXT,      -- JSON array of review snippets
-                strategy TEXT,            -- 'audit' or 'no_website'
-                audit_issues TEXT,        -- JSON or semicolon-separated string
-                status TEXT DEFAULT 'new', -- 'new', 'analyzed', 'emailed', 'failed', 'ignored'
-                parent_company_id INTEGER, -- Foreign key to parent_companies
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                description TEXT,
+                sample_reviews TEXT,
+                strategy TEXT,
+                audit_issues TEXT,
+                status TEXT DEFAULT 'new',
+                parent_company_id INTEGER,
+                created_at TIMESTAMP DEFAULT {timestamp_default},
+                updated_at TIMESTAMP DEFAULT {timestamp_default},
                 UNIQUE(business_name, website)
             )
-        ''')
-        
-        # Parent Companies: Tracks businesses sharing same website (franchises, etc.)
-        cursor.execute('''
+        """)
+
+        # Parent Companies
+        cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS parent_companies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {primary_key if self.is_postgres else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
                 parent_name TEXT,
                 shared_website TEXT UNIQUE,
                 business_count INTEGER DEFAULT 1,
-                analyzed BOOLEAN DEFAULT 0,
-                email_sent BOOLEAN DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                analyzed BOOLEAN DEFAULT FALSE,
+                email_sent BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT {timestamp_default}
             )
-        ''')
-        
-        # Actions Log: Tracks emails sent for daily limits
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS actions_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                lead_id INTEGER,
-                action_type TEXT, -- 'email_sent'
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(lead_id) REFERENCES leads(id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        """)
 
-        conn = sqlite3.connect(self.db_file)
-        cursor = conn.cursor()
-        cursor.execute('''
+        # Actions Log
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS actions_log (
+                {primary_key if self.is_postgres else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
+                lead_id INTEGER,
+                action_type TEXT,
+                timestamp TIMESTAMP DEFAULT {timestamp_default}
+            )
+        """)
+
+        # Email Events
+        cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS email_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {primary_key if self.is_postgres else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
                 lead_id INTEGER,
                 event_type TEXT,
                 meta TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(lead_id) REFERENCES leads(id)
+                timestamp TIMESTAMP DEFAULT {timestamp_default}
             )
-        ''')
+        """)
+
         conn.commit()
         conn.close()
     class LeadModel(BaseModel):
@@ -123,79 +132,96 @@ class DataManager:
         """
         Check if a lead exists by website (strong match) or name (fuzzy match).
         """
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         # 1. Strong check by Website
         if website:
-            cursor.execute("SELECT id FROM leads WHERE website = ?", (website,))
+            cursor.execute(f"SELECT id FROM leads WHERE website = {self.placeholder}", (website,))
             if cursor.fetchone():
                 conn.close()
                 return True
-                
+
         # 2. Check by Name
-        cursor.execute("SELECT id FROM leads WHERE business_name = ?", (business_name,))
+        cursor.execute(f"SELECT id FROM leads WHERE business_name = {self.placeholder}", (business_name,))
         result = cursor.fetchone()
         conn.close()
         return result is not None
 
     def save_lead(self, lead_data):
         """Save a new lead to the database. Ignores duplicates silently."""
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
 
         try:
             normalized = None
             try:
-                if hasattr(self, 'LeadModel') and issubclass(self.LeadModel, BaseModel):
+                if hasattr(self, "LeadModel") and issubclass(self.LeadModel, BaseModel):
                     normalized = self.LeadModel(**lead_data).dict()
             except Exception:
                 normalized = None
             payload = normalized or {
-                'business_name': lead_data.get('business_name'),
-                'website': lead_data.get('website'),
-                'email': lead_data.get('email'),
-                'phone': lead_data.get('phone'),
-                'address': lead_data.get('address'),
-                'city': lead_data.get('city'),
-                'niche': lead_data.get('niche'),
-                'rating': lead_data.get('rating', 0),
-                'review_count': lead_data.get('review_count', 0),
-                'description': lead_data.get('description'),
-                'sample_reviews': lead_data.get('sample_reviews'),
-                'strategy': lead_data.get('strategy'),
-                'audit_issues': lead_data.get('audit_issues'),
-                'parent_company_id': lead_data.get('parent_company_id'),
+                "business_name": lead_data.get("business_name"),
+                "website": lead_data.get("website"),
+                "email": lead_data.get("email"),
+                "phone": lead_data.get("phone"),
+                "address": lead_data.get("address"),
+                "city": lead_data.get("city"),
+                "niche": lead_data.get("niche"),
+                "rating": lead_data.get("rating", 0),
+                "review_count": lead_data.get("review_count", 0),
+                "description": lead_data.get("description"),
+                "sample_reviews": lead_data.get("sample_reviews"),
+                "strategy": lead_data.get("strategy"),
+                "audit_issues": lead_data.get("audit_issues"),
+                "parent_company_id": lead_data.get("parent_company_id"),
             }
-            cursor.execute('''
-                INSERT OR IGNORE INTO leads (
-                    business_name, website, email, phone, address, city, niche,
-                    rating, review_count, description, sample_reviews, 
-                    strategy, audit_issues, parent_company_id, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                payload.get('business_name'),
-                payload.get('website'),
-                payload.get('email'),
-                payload.get('phone'),
-                payload.get('address'),
-                payload.get('city'),
-                payload.get('niche'),
-                payload.get('rating', 0),
-                payload.get('review_count', 0),
-                payload.get('description'),
-                payload.get('sample_reviews'),
-                payload.get('strategy'),
-                payload.get('audit_issues'),
-                payload.get('parent_company_id'),
-                'scraped' # Initial status
-            ))
+
+            cols = [
+                "business_name",
+                "website",
+                "email",
+                "phone",
+                "address",
+                "city",
+                "niche",
+                "rating",
+                "review_count",
+                "description",
+                "sample_reviews",
+                "strategy",
+                "audit_issues",
+                "parent_company_id",
+                "status",
+            ]
+            vals = [
+                payload.get("business_name"),
+                payload.get("website"),
+                payload.get("email"),
+                payload.get("phone"),
+                payload.get("address"),
+                payload.get("city"),
+                payload.get("niche"),
+                payload.get("rating", 0),
+                payload.get("review_count", 0),
+                payload.get("description"),
+                payload.get("sample_reviews"),
+                payload.get("strategy"),
+                payload.get("audit_issues"),
+                payload.get("parent_company_id"),
+                "scraped",
+            ]
+
+            insert_sql = f"INSERT INTO leads ({', '.join(cols)}) VALUES ({', '.join([self.placeholder] * len(cols))})"
+            if self.is_postgres:
+                insert_sql += " ON CONFLICT (business_name, website) DO NOTHING"
+            else:
+                insert_sql = insert_sql.replace("INSERT INTO", "INSERT OR IGNORE INTO")
+
+            cursor.execute(insert_sql, vals)
             conn.commit()
             if cursor.rowcount > 0:
                 print(f"[DB] Saved new lead: {lead_data.get('business_name')}")
-            else:
-                pass # Duplicate
-                
         except Exception as e:
             print(f"[DB] Error saving lead: {e}")
         finally:
@@ -203,9 +229,9 @@ class DataManager:
 
             
     def get_lead_id(self, business_name):
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM leads WHERE business_name = ?", (business_name,))
+        cursor.execute(f"SELECT id FROM leads WHERE business_name = {self.placeholder}", (business_name,))
         res = cursor.fetchone()
         conn.close()
         return res[0] if res else None
@@ -215,18 +241,18 @@ class DataManager:
         lead_id = self.get_lead_id(business_name)
         if not lead_id:
             return
-            
-        conn = sqlite3.connect(self.db_file)
+
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         try:
             # Add to log
-            cursor.execute("INSERT INTO actions_log (lead_id, action_type) VALUES (?, ?)", (lead_id, action_type))
-            
+            cursor.execute(f"INSERT INTO actions_log (lead_id, action_type) VALUES ({self.placeholder}, {self.placeholder})", (lead_id, action_type))
+
             # Update lead status
             new_status = 'emailed' if action_type == 'email_sent' else 'processed'
-            cursor.execute("UPDATE leads SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_status, lead_id))
-            
+            cursor.execute(f"UPDATE leads SET status = {self.placeholder}, updated_at = CURRENT_TIMESTAMP WHERE id = {self.placeholder}", (new_status, lead_id))
+
             conn.commit()
             print(f"[DB] Logged action '{action_type}' for {business_name}")
         except Exception as e:
@@ -236,11 +262,14 @@ class DataManager:
 
     def count_daily_actions(self):
         """Count how many emails were sent TODAY."""
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
-        # SQLite's 'date(\'now\')' returns UTC date. Ideally match local, but consistency matters most.
-        cursor.execute("SELECT count(*) FROM actions_log WHERE date(timestamp) = date('now') AND action_type = 'email_sent'")
+
+        # Handle SQLite vs Postgres date differences
+        date_expr = "timestamp::date = CURRENT_DATE" if self.is_postgres else "date(timestamp) = date('now')"
+        query = f"SELECT count(*) FROM actions_log WHERE {date_expr} AND action_type = 'email_sent'"
+
+        cursor.execute(query)
         count = cursor.fetchone()[0]
         conn.close()
         return count
@@ -249,38 +278,44 @@ class DataManager:
         """Check if a website is already registered as a parent company."""
         if not website:
             return False
-            
-        conn = sqlite3.connect(self.db_file)
+
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM parent_companies WHERE shared_website = ?", (website,))
+        cursor.execute(f"SELECT id FROM parent_companies WHERE shared_website = {self.placeholder}", (website,))
         result = cursor.fetchone()
         conn.close()
         return result is not None
-    
+
     def get_parent_company_id(self, website):
         """Get parent company ID by website."""
         if not website:
             return None
-            
-        conn = sqlite3.connect(self.db_file)
+
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM parent_companies WHERE shared_website = ?", (website,))
+        cursor.execute(f"SELECT id FROM parent_companies WHERE shared_website = {self.placeholder}", (website,))
         result = cursor.fetchone()
         conn.close()
         return result[0] if result else None
-    
+
     def create_parent_company(self, website, business_name):
         """Create a new parent company entry for businesses sharing a website."""
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         try:
-            cursor.execute('''
+            cursor.execute(f'''
                 INSERT INTO parent_companies (parent_name, shared_website, business_count)
-                VALUES (?, ?, 1)
+                VALUES ({self.placeholder}, {self.placeholder}, 1)
             ''', (business_name, website))
             conn.commit()
-            parent_id = cursor.lastrowid
+            parent_id = cursor.lastrowid if not self.is_postgres else cursor.execute("SELECT LASTVAL()").fetchone()[0]
+            # Actually for Postgres we should use RETURNING id
+            if self.is_postgres:
+                 # Redo with returning if possible, or just use another query
+                 cursor.execute(f"SELECT id FROM parent_companies WHERE shared_website = {self.placeholder}", (website,))
+                 parent_id = cursor.fetchone()[0]
+
             print(f"[DB] Created parent company: {business_name} ({website})")
             return parent_id
         except Exception as e:
@@ -292,22 +327,22 @@ class DataManager:
     def get_business_name_by_email(self, email):
         if not email:
             return None
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT business_name FROM leads WHERE email = ?", (email,))
+        cursor.execute(f"SELECT business_name FROM leads WHERE email = {self.placeholder}", (email,))
         res = cursor.fetchone()
         conn.close()
         return res[0] if res else None
-    
+
     def record_email_event(self, business_name, event_type, meta=None):
         lead_id = self.get_lead_id(business_name)
         if not lead_id:
             return
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO email_events (lead_id, event_type, meta) VALUES (?, ?, ?)",
+                f"INSERT INTO email_events (lead_id, event_type, meta) VALUES ({self.placeholder}, {self.placeholder}, {self.placeholder})",
                 (lead_id, event_type, json.dumps(meta or {}))
             )
             conn.commit()
@@ -318,31 +353,31 @@ class DataManager:
     
     def increment_parent_company_count(self, website):
         """Increment the business count for a parent company."""
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         try:
-            cursor.execute('''
+            cursor.execute(f'''
                 UPDATE parent_companies 
                 SET business_count = business_count + 1 
-                WHERE shared_website = ?
+                WHERE shared_website = {self.placeholder}
             ''', (website,))
             conn.commit()
         except Exception as e:
             print(f"[DB] Error incrementing parent count: {e}")
         finally:
             conn.close()
-    
+
     def mark_parent_company_emailed(self, website):
         """Mark a parent company as having been emailed."""
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         try:
-            cursor.execute('''
+            cursor.execute(f'''
                 UPDATE parent_companies 
-                SET email_sent = 1, analyzed = 1 
-                WHERE shared_website = ?
+                SET email_sent = TRUE, analyzed = TRUE 
+                WHERE shared_website = {self.placeholder}
             ''', (website,))
             conn.commit()
             print(f"[DB] Marked parent company as emailed: {website}")
@@ -350,14 +385,14 @@ class DataManager:
             print(f"[DB] Error marking parent emailed: {e}")
         finally:
             conn.close()
-    
+
     def lead_age_days_by_website(self, website):
         if not website:
             return 0
-        conn = sqlite3.connect(self.db_file)
+        conn = self.get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("SELECT created_at FROM leads WHERE website = ? ORDER BY created_at ASC LIMIT 1", (website,))
+            cursor.execute(f"SELECT created_at FROM leads WHERE website = {self.placeholder} ORDER BY created_at ASC LIMIT 1", (website,))
             row = cursor.fetchone()
             if not row or not row[0]:
                 conn.close()

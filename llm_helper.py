@@ -54,6 +54,29 @@ MASTER_BODY_TEMPLATE = (
     "Best,\n{sender_name}"
 )
 
+def _get_fallback_subject(business_name):
+    """Simple fallback subject if LLM fails."""
+    return f"Question regarding {business_name}"
+
+def _enforce_rules(subject, body, business_name, trade, city, first_name):
+    """Enforce sanity rules on the generated body."""
+    # Ensure business name is present
+    if business_name.lower() not in body.lower():
+        body = f"I was looking into {business_name} in {city} and...\n\n" + body
+    
+    # Ensure no placeholder brackets
+    body = body.replace("[business_name]", business_name).replace("[trade]", trade).replace("[city]", city)
+    body = body.replace("[First Name]", first_name or "there").replace("[Your Name]", config.SENDER_NAME)
+    
+    return body
+
+def _fix_subject(subject, business_name):
+    """Clean up any LLM weirdness in subject."""
+    subject = subject.strip().strip('"').strip("'")
+    if "Subject:" in subject:
+        subject = subject.replace("Subject:", "").strip()
+    return subject
+
 def generate_spintax_email(business_name, city, industry, first_name=None):
     """
     Generates a highly randomized email using the Master Spintax Template.
@@ -1072,6 +1095,9 @@ def generate_email_content(business_name, trade, city, strategy="audit", audit_i
 
                 body = _enforce_rules(subject, body, business_name, trade, city, first_name)
                 subject = _fix_subject(subject, business_name)
+                
+                # Double check with _finalize
+                subject, body = _finalize(subject, body, business_name, trade, city, first_name)
                 
                 # Validation
                 valid, validation_error = _validate_email_content(subject, body, business_name, trade)

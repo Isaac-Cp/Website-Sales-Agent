@@ -29,16 +29,11 @@ class Scraper:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
-        options.add_argument("--disable-software-rasterizer")
         options.add_argument("--disable-extensions")
-        options.add_argument("--disable-background-networking")
-        options.add_argument("--disable-sync")
-        options.add_argument("--disable-default-apps")
         options.add_argument("--mute-audio")
         options.add_argument("--disable-logging")
-        options.add_argument("--blink-settings=imagesEnabled=false")
         options.add_argument("--window-size=1280,720")
-        options.page_load_strategy = 'eager'
+        options.page_load_strategy = 'normal'
         
         # User agent
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -48,12 +43,12 @@ class Scraper:
         
         # Profile Preferences (Apply BEFORE initialization)
         prefs = {
-            "profile.managed_default_content_settings.images": 2, 
+            "profile.managed_default_content_settings.images": 1, 
             "profile.default_content_setting_values.notifications": 2,
-            "profile.managed_default_content_settings.stylesheets": 2,
-            "profile.managed_default_content_settings.cookies": 2,
+            "profile.managed_default_content_settings.stylesheets": 1,
+            "profile.managed_default_content_settings.cookies": 1,
             "profile.managed_default_content_settings.javascript": 1,
-            "profile.managed_default_content_settings.plugins": 2,
+            "profile.managed_default_content_settings.plugins": 1,
             "profile.managed_default_content_settings.popups": 2,
             "profile.managed_default_content_settings.geolocation": 2,
             "profile.managed_default_content_settings.media_stream": 2,
@@ -113,31 +108,107 @@ class Scraper:
                     manager = ChromeDriverManager()
                 for attempt in range(3):
                     try:
+                        print(f"DEBUG: Installing driver (attempt {attempt+1})...")
                         driver_path = manager.install()
+                        print(f"DEBUG: Driver installed at {driver_path}")
                         break
                     except:
                         time.sleep(2)
             
             if not driver_path:
-                # Last resort: check PATH or common locations
+                print("DEBUG: Using fallback driver path.")
                 driver_path = "chromedriver" if not is_windows else "chromedriver.exe"
             
-            # Initialize Chrome
+            print("DEBUG: Creating uc.Chrome instance...")
             # On Linux (Servers), use_subprocess=True is often required for stability
             # On Windows, use_subprocess=False avoids WinError 6
             use_sub = True if not is_windows else False
             
-            driver = uc.Chrome(
-                options=options,
-                driver_executable_path=driver_path if os.path.exists(driver_path) else None,
-                use_subprocess=use_sub,
-                version_main=None
-            )
+            # Try to get main version dynamically
+            v_main = None
+            try:
+                import subprocess
+                if is_windows:
+                    cmd = 'reg query "HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon" /v version'
+                    out = subprocess.check_output(cmd, shell=True).decode()
+                    import re
+                    m = re.search(r"(\d+)\.", out)
+                    if m: v_main = int(m.group(1))
+                else:
+                    cmd = 'google-chrome --version'
+                    out = subprocess.check_output(cmd, shell=True).decode()
+                    import re
+                    m = re.search(r"(\d+)\.", out)
+                    if m: v_main = int(m.group(1))
+            except:
+                pass
             
-            # Final timeouts
+            # Unified Driver Initialization with Fallback
+            options.add_argument("--remote-debugging-port=9222")
+            
+            v_main = v_main or 144
+            print(f"DEBUG: Attempting uc.Chrome (version_main={v_main}, use_subprocess={use_sub})...")
+            
+            try:
+                # Set a strict timeout for UC constructor
+                import threading
+                import queue
+                q = queue.Queue()
+
+                def init_uc():
+                    try:
+                        d = uc.Chrome(options=options, use_subprocess=use_sub, version_main=v_main)
+                        q.put(d)
+                    except Exception as e:
+                        q.put(e)
+
+                t = threading.Thread(target=init_uc)
+                t.daemon = True
+                t.start()
+                t.join(timeout=30)
+
+                if q.empty():
+                    print("DEBUG: uc.Chrome timed out. Falling back to standard Selenium.")
+                    raise Exception("UC Timeout")
+                
+                res = q.get()
+                if isinstance(res, Exception):
+                    print(f"DEBUG: uc.Chrome failed: {res}. Falling back to standard Selenium.")
+                    raise res
+                
+                self.driver = res
+                print("DEBUG: uc.Chrome initialized successfully.")
+
+            except Exception:
+                print("DEBUG: Falling back to standard Selenium driver...")
+                from selenium import webdriver
+                from selenium.webdriver.chrome.service import Service
+                
+                # Re-clean options for standard selenium (some UC ones might conflict)
+                std_options = webdriver.ChromeOptions()
+                if self.headless:
+                    std_options.add_argument("--headless=new")
+                std_options.add_argument("--no-sandbox")
+                std_options.add_argument("--disable-dev-shm-usage")
+                std_options.add_argument("--disable-gpu")
+                
+                try:
+                    # Use the path we verified exists if available
+                    if driver_path and os.path.exists(driver_path):
+                        service = Service(driver_path)
+                    else:
+                        service = Service(ChromeDriverManager().install())
+                    
+                    self.driver = webdriver.Chrome(service=service, options=std_options)
+                    print("DEBUG: Standard Selenium initialized.")
+                except Exception as e:
+                    print(f"DEBUG: Critical failure - even standard driver failed: {e}")
+                    raise
+
+            driver = self.driver
             driver.set_page_load_timeout(30)
-            driver.implicitly_wait(4)
-            print("DEBUG: Driver initialized with CPU optimizations.")
+            driver.implicitly_wait(5)
+            return driver
             
             # Execute anti-detection scripts
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -199,14 +270,24 @@ class Scraper:
         print(f"Navigating to Maps for query: {query}")
         
         try:
-            driver.get("https://www.google.com/maps")
-            time.sleep(3)
+            # Retry loop for navigation (handles transient network issues)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    driver.get("https://www.google.com/maps")
+                    # Wait for results or body
+                    WebDriverWait(driver, 20).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                    print(f"  Successfully loaded Maps (Attempt {attempt+1})")
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise e
+                    print(f"  Maps load attempt {attempt+1} failed ({e}). Retrying...")
+                    time.sleep(5)
             
-            # Wait for page to be fully loaded
-            WebDriverWait(driver, 15).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
-            time.sleep(2)
+            time.sleep(3)
             
         except Exception as e:
             print(f"  Error loading Google Maps: {e}")
@@ -293,6 +374,9 @@ class Scraper:
             except Exception as e:
                 print(f"  URL navigation failed: {e}")
         
+        if search_success:
+            time.sleep(5) # Give results time to load
+        
         if not search_success:
             print("  [ERROR] Could not perform search with any method")
             # Save screenshot for debugging
@@ -317,13 +401,23 @@ class Scraper:
         # 3. Scroll Results Feed
         try:
             print("  Waiting for results feed...")
-            try:
-                feed = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='feed']"))
-                )
-            except:
-                print("  No role='feed' found, checking alternative containers...")
-                feed = driver.find_element(By.CSS_SELECTOR, "div[aria-label*='Results']")
+            feed = None
+            feed_selectors = [
+                "div[role='feed']",
+                "div[aria-label*='Results']",
+                "div[aria-label*='Ergebnisse']",
+                "div.m67q60-a86A1e-jY79S-H9tG9c", # Common class obfuscation
+                "div.m67q60-a86A1e-jY79S"
+            ]
+            
+            for selector in feed_selectors:
+                try:
+                    feed = driver.find_element(By.CSS_SELECTOR, selector)
+                    if feed:
+                        print(f"  Found feed with selector: {selector}")
+                        break
+                except:
+                    continue
             
             if feed:
                 print("  Scrolling results...")
@@ -331,7 +425,7 @@ class Scraper:
                     driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", feed)
                     time.sleep(2)
             else:
-                print("  No feed container found; proceeding with page-wide parsing.")
+                print("  No explicit feed container found; proceeding with direct element lookup.")
         except Exception as e:
             print(f"  Feed scroll issue: {e}")
              
@@ -343,19 +437,32 @@ class Scraper:
         
         leads = []
         try:
-            try:
-                feed = driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
-                items = feed.find_elements(By.CSS_SELECTOR, "div[role='article']")
-            except:
-                items = []
-            if not items:
-                items = driver.find_elements(By.CSS_SELECTOR, "div[role='article']")
-            if not items:
-                items = driver.find_elements(By.CLASS_NAME, "hfpxzc")
-            if not items:
-                items = driver.find_elements(By.CSS_SELECTOR, "div.Nv2PK")
-            if not items:
-                items = driver.find_elements(By.XPATH, "//a[contains(@href,'/maps/place')] | //div[contains(@class,'Nv2PK')]//a")
+            items = []
+            item_selectors = [
+                "div[role='article']",
+                "a.hfpxzc",
+                "div.Nv2PK",
+                "div.m67q60-a86A1e-jY79S",
+                "div.VkpSyc",
+                "//a[contains(@href,'/maps/place')]",
+                "//div[contains(@class,'Nv2PK')]//a"
+            ]
+            
+            for selector in item_selectors:
+                try:
+                    if selector.startswith("//"):
+                        found = driver.find_elements(By.XPATH, selector)
+                    else:
+                        found = driver.find_elements(By.CSS_SELECTOR, selector)
+                    
+                    if found:
+                        # Filter out non-business items (e.g. ads or headers)
+                        for item in found:
+                            if item not in items:
+                                items.append(item)
+                except:
+                    continue
+            
             print(f"Found {len(items)} potential listings.")
             
             for i, item in enumerate(items):
