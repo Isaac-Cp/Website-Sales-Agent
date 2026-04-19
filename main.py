@@ -22,6 +22,7 @@ from yelp_scraper import extract_business_website
 from scrapers_manager import run_parallel_scraping
 from utils import canonicalize_website, pagespeed
 from core.pipeline import run_pipeline
+from web_ui import render_homepage
 try:
     from langchain_groq import ChatGroq
 except ImportError:
@@ -53,9 +54,11 @@ except Exception:
 
 try:
     from fastapi import FastAPI, WebSocket
+    from fastapi.responses import HTMLResponse
 except Exception:
     FastAPI = None
     WebSocket = None
+    HTMLResponse = None
 
 try:
     import uvicorn
@@ -72,7 +75,22 @@ app = None
 if FastAPI:
     app = FastAPI(title="Website Sales Agent API")
 
-    @app.get("/")
+    def service_snapshot():
+        snapshot = {"status": "healthy", "service": "website-sales-agent", "running": True}
+        try:
+            from database import DataManager
+
+            dm = DataManager()
+            snapshot["daily_actions"] = dm.count_daily_actions()
+        except Exception as e:
+            snapshot["error"] = str(e)
+        return snapshot
+
+    @app.get("/", response_class=HTMLResponse)
+    def homepage():
+        """Human-friendly landing page for the web deployment."""
+        return HTMLResponse(render_homepage(service_snapshot()))
+
     @app.get("/health")
     def health_check():
         """Standard health check for Koyeb/PaaS."""
@@ -81,13 +99,7 @@ if FastAPI:
     @app.get("/status")
     def site_status():
         """Returns the current status and activity count."""
-        try:
-            from database import DataManager
-
-            dm = DataManager()
-            return {"running": True, "daily_actions": dm.count_daily_actions()}
-        except Exception as e:
-            return {"running": True, "error": str(e)}
+        return service_snapshot()
 
     @app.websocket("/ws/logs")
     async def logs(ws: WebSocket):
