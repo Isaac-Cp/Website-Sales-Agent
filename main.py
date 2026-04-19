@@ -213,7 +213,7 @@ def main():
         wf.add_node("chatbot_node", chatbot_node)
         wf.add_edge(START, "chatbot_node")
         wf.add_edge("chatbot_node", END)
-        app = wf.compile()
+        workflow_app = wf.compile()
         mem_client = chromadb.Client() if chromadb else None
         lf = Langfuse() if Langfuse else None
         try:
@@ -221,7 +221,7 @@ def main():
                 logfire.init(api_key=config.LOGFIRE_API_KEY)
         except Exception:
             pass
-        for event in app.stream({"messages": [("user", "status and next actions")] }):
+        for event in workflow_app.stream({"messages": [("user", "status and next actions")] }):
             for value in event.values():
                 out = value["messages"][-1].content
                 print(out)
