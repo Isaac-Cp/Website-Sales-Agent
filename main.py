@@ -6,9 +6,9 @@ from urllib.parse import urlparse
 import config
 from scraper import Scraper
 from database import DataManager
-from mailer import Mailer
+from mailer import Mailer, build_smtp_pool
+from validator import get_email_validator
 import llm_helper
-import validator
 import yelp_api_scraper
 import concurrent.futures
 import imap_tracker
@@ -21,24 +21,39 @@ from freedom_search import FreedomSearch
 from yelp_scraper import extract_business_website
 from scrapers_manager import run_parallel_scraping
 from utils import canonicalize_website, pagespeed
+from core.pipeline import run_pipeline
 try:
     from langchain_groq import ChatGroq
+except ImportError:
+    ChatGroq = None
+except Exception:
+    ChatGroq = None
+
+try:
     from langgraph.graph import StateGraph, START, END
     from typing import TypedDict, Annotated
     from langgraph.graph.message import add_messages
-    import chromadb
-    from langfuse import Langfuse
-    from fastapi import FastAPI, WebSocket
-    import uvicorn
-    import logfire
 except Exception:
-    ChatGroq = None
     StateGraph = None
     START = None
     END = None
     add_messages = None
     TypedDict = dict
     Annotated = list
+
+try:
+    import chromadb
+    from langfuse import Langfuse
+    from fastapi import FastAPI, WebSocket
+    import uvicorn
+    import logfire
+except Exception:
+    chromadb = None
+    Langfuse = None
+    FastAPI = None
+    WebSocket = None
+    uvicorn = None
+    logfire = None
     chromadb = None
     Langfuse = None
     FastAPI = None
@@ -104,11 +119,76 @@ def parse_args():
     ap.add_argument("--source", type=str)
     ap.add_argument("--role", type=str)
     ap.add_argument("--audit", action="store_true", help="Run Audit-First strategy")
+    ap.add_argument("--batch", action="store_true", help="Process existing leads from database instead of scraping")
     return ap.parse_args()
 
 def log(event, **fields):
     payload = {"event": event, "ts": int(time.time()), **fields}
     print(json.dumps(payload))
+
+
+def _normalized_text(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() in {"N/A", "NONE", "NULL", "UNKNOWN"}:
+        return None
+    return text
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def has_website(lead):
+    return bool(_normalized_text((lead or {}).get("website")))
+
+
+def has_email_contact(lead):
+    return bool(_normalized_text((lead or {}).get("email")))
+
+
+def has_phone_contact(lead):
+    return bool(_normalized_text((lead or {}).get("phone")))
+
+
+def classify_lead(lead):
+    return "has_website" if has_website(lead) else "no_website"
+
+
+def score_no_website_lead(lead):
+    score = 0
+
+    if not has_website(lead):
+        score += 40
+
+    if _safe_int((lead or {}).get("review_count"), 0) > 20:
+        score += 20
+
+    if _safe_float((lead or {}).get("rating"), 0.0) >= 4.0:
+        score += 15
+
+    category_context = " ".join(
+        str((lead or {}).get(key) or "")
+        for key in ("category", "niche", "description", "business_name")
+    ).lower()
+    if "restaurant" in category_context:
+        score += 10
+
+    if has_phone_contact(lead):
+        score += 10
+
+    return max(0, min(100, score))
 
 
 
@@ -166,8 +246,9 @@ def main():
     if args.signals:
         dm = DataManager()
         smtp_accounts = config.get_smtp_accounts()
-        mailers = [Mailer(a["email"], a["password"], a["server"], a["port"]) for a in smtp_accounts] or [Mailer("", "", config.SMTP_SERVER, config.SMTP_PORT)]
-        mailer = mailers[0]
+        smtp_pool = build_smtp_pool(smtp_accounts)
+        mailers = smtp_pool.mailers or [Mailer("", "", config.SMTP_SERVER, config.SMTP_PORT)]
+        mailer = smtp_pool.peek_mailer() or mailers[0]
         niche = args.niche or getattr(config, "DEFAULT_TECH", "Shopify")
         location = args.location or "US"
         limit = args.limit or 20
@@ -239,15 +320,46 @@ def main():
                     return r
                 except Exception:
                     return None
-        def quick_observation(text):
+        def quick_observation(text, triggers=None):
+            triggers = triggers or []
             tx = (text or "").lower()
+            
+            # Use triggers to generate specific observations
+            if "no_ssl" in triggers:
+                return "the site still uses HTTP instead of HTTPS"
+            if "old_php" in triggers:
+                return "the site appears to be running older PHP which might affect performance"
+            if "old_jquery" in triggers:
+                return "the site uses an older version of jQuery"
+            if "missing_schema" in triggers:
+                return "the site lacks structured data markup for better search visibility"
+            if "slow_pagespeed" in triggers:
+                return "the page load speed could be improved for better user experience"
+            if "shopify_no_apple_pay" in triggers:
+                return "the Shopify store doesn't seem to have Apple Pay enabled"
+            if "wordpress_heavy_theme" in triggers:
+                return "the WordPress site uses a heavy theme that might slow it down"
+            if "no_google_pixel" in triggers:
+                return "the site doesn't have Google Analytics tracking"
+            if "no_fb_pixel" in triggers:
+                return "the site lacks Facebook pixel for conversion tracking"
+            if "no_mobile_viewport" in triggers:
+                return "the site is missing a mobile viewport meta tag"
+            if "large_page_size" in triggers:
+                return "the page size is quite large which may affect loading speed"
+            if "font_loading_issue" in triggers:
+                return "font loading might be causing layout shifts"
+            if "missing_alt_tags" in triggers:
+                return "some images are missing alt tags for accessibility"
+            
+            # Fallback to text-based observations
             if "tel:" not in tx and "call" not in tx:
-                return "the call option wasn’t obvious on first view"
+                return "the call option wasn't obvious on first view"
             if "contact" in tx and "book" not in tx and "schedule" not in tx:
-                return "the booking step wasn’t immediately clear"
+                return "the booking step wasn't immediately clear"
             if "phone" in tx and "footer" in tx:
                 return "the phone number seemed easy to miss"
-            return "the next step wasn’t obvious at first glance"
+            return "the next step wasn't obvious at first glance"
         def detect(url, r):
             triggers = []
             if r and r.url.scheme == "http":
@@ -273,6 +385,14 @@ def main():
                 triggers.append("missing_schema")
             if ("cdn.shopify.com" in text or "myshopify.com" in text) and all(k not in text.lower() for k in ["apple pays", "apple pay", "applepaysession", "applepay"]):
                 triggers.append("shopify_no_apple_pay")
+            if "<meta name=\"viewport\"" not in text.lower():
+                triggers.append("no_mobile_viewport")
+            if len(text) > 500000:  # Rough check for large pages
+                triggers.append("large_page_size")
+            if "font-awesome" in text.lower() and "font-display" not in text.lower():
+                triggers.append("font_loading_issue")
+            if "<img" in text and "alt=" not in text:
+                triggers.append("missing_alt_tags")
             return triggers
         async def check_broken_checkout(url):
             if not httpx:
@@ -461,8 +581,8 @@ def main():
                             log("dry_send_preview", to=picked, subject=subj, body_preview=body[:200])
                             dm.record_email_event(name, "dry_preview", {"to": picked})
                         else:
-                            mailer.send_email(picked, subj, body)
-                            dm.log_action(name, "email_sent")
+                            smtp_pool.send_email(picked, subj, body, preferred_mailer=mailer)
+                            dm.log_action(name, "email_sent", {"sequence_stage": "initial"})
                 print("Signals session finished.")
                 return
             for u, r in zip(urls, results):
@@ -502,7 +622,11 @@ def main():
                     "strategy": "signal",
                     "description": None,
                     "sample_reviews": None,
-                    "audit_issues": ";".join(t)
+                    "audit_issues": ";".join(t),
+                    "website_signals": {},
+                    "competitors": [],
+                    "pagespeed_score": ps,
+                    "opportunity_score": None,
                 }
                 dm.save_lead(payload)
                 host = name
@@ -535,14 +659,42 @@ def main():
                             picked = em
                             break
                 if picked:
-                    obs = quick_observation(getattr(resp, "text", ""))
-                    subj, body = llm_helper.generate_email_master(name, niche, location, obs)
+                    # Build lead_data for advanced pipeline
+                    lead_data = {
+                        "business_name": name,
+                        "industry": niche,
+                        "city": location,
+                        "website": u,
+                        "audit_issues": t,
+                        "pagespeed_score": ps,
+                        "first_name": "there",
+                        "description": "",
+                        "reviews": [],
+                        "competitors": [],
+                        "rating": None,
+                        "review_count": None,
+                    }
+                    # Try to get more data
+                    try:
+                        if yelp_api:
+                            yelp_results = yelp_api.scrape(f"{name} {location}")
+                            if yelp_results:
+                                lead = yelp_results[0]
+                                lead_data["rating"] = lead.get("rating")
+                                lead_data["review_count"] = lead.get("review_count")
+                                lead_data["reviews"] = [lead.get("description", "")] if lead.get("description") else []
+                    except Exception:
+                        pass
+                    
+                    result = run_pipeline(lead_data)
+                    subj = result.get("subject", f"Quick note about {name}")
+                    body = result.get("email", "")
                     if getattr(config, "DRY_RUN", False):
                         log("dry_send_preview", to=picked, subject=subj, body_preview=body[:200])
                         dm.record_email_event(name, "dry_preview", {"to": picked})
                     else:
-                        mailer.send_email(picked, subj, body)
-                        dm.log_action(name, "email_sent")
+                        smtp_pool.send_email(picked, subj, body, preferred_mailer=mailer)
+                        dm.log_action(name, "email_sent", {"sequence_stage": "initial"})
             lp = getattr(args, "linkedin_profile", None)
             if lp:
                 enriched = await proxycurl_enrich(lp)
@@ -555,14 +707,14 @@ def main():
                         emails = await snov_domain_emails(d, token, titles)
                     for em in emails[:1]:
                         if mailer.validate_email_deep(em, smtp_probe=False):
-                            subj = f"Quick idea for {name}"
-                            body = f"Hi,\nI help companies improve conversions.\nWould you be open to a quick audit?\nThanks,\n{config.SENDER_NAME}"
+                            obs = "the website could benefit from some optimization opportunities"
+                            subj, body = llm_helper.generate_email_master(name, "business", "online", obs)
                             if getattr(config, "DRY_RUN", False):
                                 log("dry_send_preview", to=em, subject=subj, body_preview=body[:200])
                                 dm.record_email_event(name, "dry_preview", {"to": em})
                             else:
-                                mailer.send_email(em, subj, body)
-                                dm.log_action(name, "email_sent")
+                                smtp_pool.send_email(em, subj, body, preferred_mailer=mailer)
+                                dm.log_action(name, "email_sent", {"sequence_stage": "initial"})
             print("Signals session finished.")
         asyncio.run(run())
         return
@@ -570,14 +722,18 @@ def main():
         config.DRY_RUN = True
     dm = DataManager()
     smtp_accounts = config.get_smtp_accounts()
-    mailers = [Mailer(a["email"], a["password"], a["server"], a["port"]) for a in smtp_accounts]
-    mailer_index = 0
-    mailer = mailers[0]
+    smtp_pool = build_smtp_pool(smtp_accounts)
+    mailers = list(smtp_pool.mailers)
+    if not mailers:
+        print("[SMTP] No SMTP accounts configured. Switching to DRY_RUN mode.")
+        config.DRY_RUN = True
+        mailers = [Mailer("", "", config.SMTP_SERVER, config.SMTP_PORT)]
+        smtp_pool = None
+    mailer = smtp_pool.peek_mailer() if smtp_pool else mailers[0]
     
     # Initialize Scrapers
     scraper = Scraper(headless=config.HEADLESS) 
     yelp_api = yelp_api_scraper.YelpApiScraper()
-    osm = osm_scraper.OsmScraper()
     osm = osm_scraper.OsmScraper()
     # apollo = apollo_scraper.ApolloScraper() # Removed
     
@@ -588,16 +744,41 @@ def main():
     
     driver = scraper.get_driver()
     if not config.DRY_RUN:
-        if not mailer.test_connection():
+        working_mailer = smtp_pool.get_working_mailer(test_login=True) if smtp_pool else None
+        if not working_mailer:
             print("[SMTP] Falling back to DRY_RUN due to connection failure.")
             config.DRY_RUN = True
+        else:
+            mailer = working_mailer
     
     # 2. Daily Limit Check (DB Based)
     daily_count = dm.count_daily_actions()
     print(f"Daily actions so far: {daily_count}/{config.MAX_DAILY_ACTIONS}")
     
     # 3. Query Selection (Global Loop)
-    if args.query:
+    if args.batch:
+        print("\n--- BATCH MODE: Processing existing leads from database ---")
+        import sqlite3
+        conn = dm.get_connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT * FROM leads
+            WHERE email IS NOT NULL
+              AND email != ''
+              AND COALESCE(sequence_stage, 'initial') = 'initial'
+              AND COALESCE(status, 'scraped') NOT IN ('emailed', 'manual_queue', 'low_priority', 'no_contact', 'not_interested', 'bounced', 'appointment_booked', 'sale_closed', 'blacklisted', 'completed')
+              AND (next_action_due IS NULL OR next_action_due <= datetime('now'))
+            LIMIT ?
+        """, (args.limit or 20,))
+        leads_sorted_batch = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        print(f"Found {len(leads_sorted_batch)} candidate leads in database.")
+        
+        # We simulate a single "batch" query loop
+        queries = ["Batch Mode"]
+        session_queries = ["Batch Mode"]
+    elif args.query:
         queries = [args.query]
     else:
         if args.niches or args.locations or args.niche or args.location:
@@ -621,6 +802,7 @@ def main():
     session_limit = args.session_queries if args.session_queries else config.SESSION_QUERIES
     session_queries = random.sample(queries, min(session_limit, len(queries)))
     
+    emails_sent_in_batch = 0
     for query in session_queries:
         if daily_count >= config.MAX_DAILY_ACTIONS:
             print("Daily limit reached (start of loop).")
@@ -628,18 +810,21 @@ def main():
             
         print(f"\n--- Campaign: {query} ---")
         
-        # Parallel Scraping
-        leads_raw = run_parallel_scraping(query, scraper, driver, yelp_api, osm)
+        if args.batch:
+            leads_raw = leads_sorted_batch
+        else:
+            # Parallel Scraping
+            leads_raw = run_parallel_scraping(query, scraper, driver, yelp_api, osm)
         
         # Fallback to Bing/YP if ABSOLUTELY nothing found (Sequential fallback still useful here as last resort)
-        if len(leads_raw) == 0:
+        if len(leads_raw) == 0 and not args.batch:
              print("All primary scrapers failed. Trying legacy fallbacks...")
              # ... (Keep legacy fallback logic if desired, or assume parallel covers it)
         
         # 4. Priority Sorting: No-website businesses first
-        if config.PRIORITIZE_NO_WEBSITE:
-            leads_no_site = [l for l in leads_raw if not l.get('website')]
-            leads_with_site = [l for l in leads_raw if l.get('website')]
+        if config.PRIORITIZE_NO_WEBSITE and not args.batch:
+            leads_no_site = [l for l in leads_raw if classify_lead(l) == "no_website"]
+            leads_with_site = [l for l in leads_raw if classify_lead(l) == "has_website"]
             leads_sorted = leads_no_site + leads_with_site
             print(f"  -> Prioritized: {len(leads_no_site)} no-website, {len(leads_with_site)} with-website")
         else:
@@ -654,25 +839,50 @@ def main():
                 break
                 
             name = lead_info['business_name']
-            website = lead_info.get('website')
+            website = _normalized_text(lead_info.get('website'))
+            lead_info['website'] = website
+            lead_info['email'] = _normalized_text(lead_info.get('email'))
+            lead_info['phone'] = _normalized_text(lead_info.get('phone'))
             # If Yelp API provided only Yelp URL, try to resolve business website
             if not website and lead_info.get('yelp_url'):
                 try:
                     from yelp_scraper import extract_business_website
                     w = extract_business_website(lead_info.get('yelp_url'))
                     if w:
-                        website = w
-                        lead_info['website'] = w
+                        website = _normalized_text(w)
+                        lead_info['website'] = website
                 except Exception:
                     pass
-            rating = lead_info.get('rating', 0)
-            reviews = lead_info.get('review_count', 0)
+            lead_type = classify_lead({"website": website})
+            rating = _safe_float(lead_info.get('rating', 0), 0.0)
+            reviews = _safe_int(lead_info.get('review_count', 0), 0)
             description = lead_info.get('description')
             sample_reviews = lead_info.get('sample_reviews')
             
-            # Check DB existence
-            if dm.lead_exists(name, website):
+            # Check DB existence (Skip if in batch mode)
+            if not args.batch and dm.lead_exists(name, website):
                 continue
+            
+            # --- SAFETY THROTTLES (from send_10_emails.py) ---
+            email = _normalized_text(lead_info.get('email'))
+            if email:
+                email_domain = email.split("@")[-1].lower() if "@" in email else ""
+                # 1. Blacklist Check
+                if email_domain in config.BLACKLISTED_DOMAINS or email.lower() in config.BLACKLISTED_EMAILS:
+                    print(f"  -> Skipping blacklisted lead: {name} <{email}>")
+                    continue
+                
+                # 2. Domain Throttle
+                if email_domain and dm.count_daily_actions_for_domain(email_domain) >= config.MAX_DOMAIN_SENDS_PER_DAY:
+                    print(f"  -> Skipping {name}: reached daily domain throttle for {email_domain}.")
+                    continue
+
+            # 3. City Throttle
+            city = lead_info.get('city')
+            if city and dm.count_daily_actions_for_city(city) >= config.MAX_CITY_SENDS_PER_DAY:
+                print(f"  -> Skipping {name}: reached daily city throttle for {city}.")
+                continue
+            # ------------------------------------------------
             
             # Strategy Filter (Rating-based, reviews optional)
             if rating < config.MIN_RATING:
@@ -684,7 +894,7 @@ def main():
             parent_company_id = None
             normalized_website = canonicalize_website(website) if website else None
             if normalized_website and dm.is_parent_company(normalized_website):
-                print(f"  → Duplicate website detected: {website}")
+                print(f"  -> Duplicate website detected: {website}")
                 parent_company_id = dm.get_parent_company_id(normalized_website)
                 dm.increment_parent_company_count(normalized_website)
                 # Save lead but don't email (parent already contacted)
@@ -692,31 +902,70 @@ def main():
                 lead_info['city'] = query.split(" near ")[-1]
                 lead_info['niche'] = query.split(" near ")[0]
                 dm.save_lead(lead_info)
-                print(f"  → Saved as duplicate, skipping email")
+                print(f"  -> Saved as duplicate, skipping email")
                 continue
             
             strategy = "audit"
             audit_issues = []
-            email = None
+            email = lead_info.get('email')
             first_name = None
             website_status = None
             screenshot_path = None
+            web_signals = {}
+            pagespeed_score = None
+            opportunity_score = None
             
             # Branch A: No Website
-            if not website:
-                 strategy = "no_website"
-                 print("  -> Strategy: NO WEBSITE (Reputation Pitch)")
-                 email = lead_info.get('email') # Rare
+            if lead_type == "no_website":
+                strategy = "no_website"
+                opportunity_score = score_no_website_lead(lead_info)
+                audit_issues = [f"No website opportunity score: {opportunity_score}/100."]
+                print(
+                    f"  -> Strategy: NO WEBSITE (Opportunity Pitch) "
+                    f"[score={opportunity_score}/{config.NO_WEBSITE_MIN_SCORE}]"
+                )
+                if opportunity_score < config.NO_WEBSITE_MIN_SCORE:
+                    lead_info['audit_issues'] = "; ".join(audit_issues)
+                    lead_info['strategy'] = strategy
+                    lead_info['city'] = query.split(" near ")[-1]
+                    lead_info['niche'] = query.split(" near ")[0]
+                    lead_info['description'] = description
+                    lead_info['status'] = "low_priority"
+                    dm.save_lead(lead_info)
+                    dm.record_email_event(
+                        name,
+                        "no_website_scored_out",
+                        {
+                            "lead_type": lead_type,
+                            "opportunity_score": opportunity_score,
+                            "min_score": config.NO_WEBSITE_MIN_SCORE,
+                        },
+                    )
+                    print("  -> Skipping: no-website opportunity score below threshold.")
+                    continue
             # Branch B: Website
             else:
                 strategy = "audit"
                 print("  -> Strategy: AUDIT (Redesign Pitch)")
-                # Use scraper for basic info
-                try:
-                    email_site, audit_issues, web_signals = scraper.process_website(website)
-                except Exception as e:
-                    print(f"  -> Error processing website {website}: {e}")
-                    continue
+                
+                # BATCH MODE BYPASS: Reuse existing audit if available
+                if args.batch and lead_info.get('audit_issues'):
+                    print("  -> Using existing audit data from database.")
+                    audit_issues = [i.strip() for i in str(lead_info.get('audit_issues')).split(";") if i.strip()]
+                    web_signals = lead_info.get('website_signals') or {}
+                    if isinstance(web_signals, str):
+                        try: web_signals = json.loads(web_signals)
+                        except: web_signals = {}
+                    email_site = lead_info.get('email')
+                else:
+                    # Use scraper for basic info
+                    try:
+                        email_site, audit_issues, web_signals = scraper.process_website(website)
+                    except Exception as e:
+                        print(f"  -> Error processing website {website}: {e}")
+                        continue
+
+                email = email or email_site
                 
                 # TECH FILTERING (New)
                 if args.tech:
@@ -728,20 +977,22 @@ def main():
                          continue
                 
                 # ENHANCED AUDIT (PageSpeed + Screenshot)
-                score = None
                 screenshot_path = None
-                if getattr(config, "PAGESPEED_API_KEY", None):
+                if not (args.batch and lead_info.get('pagespeed_score')) and getattr(config, "PAGESPEED_API_KEY", None):
                     try:
                         import asyncio
                         # Create new event loop for async call if needed, or run
-                        score, screenshot_path = asyncio.run(pagespeed(website))
-                        if score is not None:
-                            if score < 0.5:
-                                audit_issues.append(f"Google PageSpeed score is poor ({int(score * 100)}/100).")
+                        pagespeed_score, screenshot_path = asyncio.run(pagespeed(website))
+                        if pagespeed_score is not None:
+                            if pagespeed_score < 0.5:
+                                audit_issues.append(f"Google PageSpeed score is poor ({int(pagespeed_score * 100)}/100).")
                                 strategy = "broken_site" # refined strategy name
-                            print(f"  -> PageSpeed Score: {score}")
+                            print(f"  -> PageSpeed Score: {pagespeed_score}")
                     except Exception as e:
                         print(f"  -> PageSpeed Error: {e}")
+                elif args.batch and lead_info.get('pagespeed_score'):
+                    pagespeed_score = lead_info.get('pagespeed_score')
+                    print(f"  -> Using existing PageSpeed Score: {pagespeed_score}")
 
                 # FREEDOM SEARCH (Find CEO)
                 # Combine site email with finding decision maker
@@ -754,7 +1005,7 @@ def main():
                 ceo_name = None
                 email_person = None
                 
-                if args.audit or not email_site:
+                if not (args.batch and lead_info.get('email')) and (args.audit or not email_site):
                     print("  -> Harnessing Freedom Search for CEO...")
                     ceo_name, ceo_profile = fs.find_ceo(name, lead_info.get('city'))
                     if ceo_name:
@@ -778,14 +1029,102 @@ def main():
                              email_person = c.get('email')
                              print(f"  -> Found contact on Team/About page: {email_person}")
                     
-                email = email_person or email_site
+                email = email or email_person or email_site
                 
                 # Register parent
                 if normalized_website and not dm.is_parent_company(normalized_website):
                     parent_company_id = dm.create_parent_company(normalized_website, name)
                     lead_info['parent_company_id'] = parent_company_id
-            
+
+                if not description:
+                    description = (
+                        web_signals.get("headline")
+                        or web_signals.get("homepage_summary")
+                        or web_signals.get("meta_description")
+                    )
+
+            lead_info['audit_issues'] = "; ".join(audit_issues or [])
+            lead_info['strategy'] = strategy
+            lead_info['website_signals'] = web_signals
+            lead_info['service_offerings'] = ", ".join([str(item).strip() for item in web_signals.get('services', [])[:4] if str(item).strip()])
+            lead_info['homepage_cta_quality'] = (
+                "Homepage CTA appears unclear or buried." if web_signals.get('cta_visibility') == 'unclear' else
+                "Homepage CTA appears visible and direct." if web_signals.get('cta_visibility') else None
+            )
+            lead_info['review_sentiment'] = (
+                f"{rating}-star average from {reviews} reviews" if rating and reviews else (
+                    f"{rating}-star average" if rating else (f"{reviews} reviews" if reviews else None)
+                )
+            )
+            lead_info['review_excerpt'] = description or lead_info.get('sample_reviews') or None
+            lead_info['local_market_signal'] = (
+                f"In {lead_info.get('city') or 'your area'}, nearby businesses are often chosen by whoever makes the first message easiest to act on."
+            )
+            lead_info['competitor_references'] = None
+            lead_info['pagespeed_score'] = pagespeed_score
+            lead_info['opportunity_score'] = opportunity_score
+            lead_info['competitors'] = lead_info.get('competitors') or []
+            lead_info['service_pages'] = ", ".join(web_signals.get('service_pages', [])[:6]) if web_signals else None
+            lead_info['pricing_mention'] = web_signals.get('pricing_mention')
+            lead_info['booking_widget'] = web_signals.get('booking_widget')
+            lead_info['operating_hours'] = web_signals.get('operating_hours')
+            lead_info['location_count'] = web_signals.get('location_count')
+            lead_info['staff_count'] = web_signals.get('staff_count')
+            lead_info['business_size'] = web_signals.get('business_size')
+            lead_info['google_business_profile_status'] = web_signals.get('google_business_profile_status')
+            lead_info['review_velocity'] = web_signals.get('review_velocity')
+            lead_info['keyword_usage'] = ", ".join(web_signals.get('keyword_usage', [])[:8]) if web_signals else None
+            lead_info['secondary_emails'] = ", ".join(web_signals.get('secondary_emails', [])[:3]) if web_signals else None
+            lead_info['phone_numbers'] = ", ".join(web_signals.get('phone_numbers', [])[:3]) if web_signals else None
+            lead_info['whatsapp_links'] = ", ".join(web_signals.get('whatsapp_links', [])[:3]) if web_signals else None
+            lead_info['service_offerings'] = ", ".join([str(item).strip() for item in web_signals.get('services', [])[:4] if str(item).strip()])
+            lead_info['homepage_cta_quality'] = (
+                "Homepage CTA appears unclear or buried." if web_signals.get('cta_visibility') == 'unclear' else
+                "Homepage CTA appears visible and direct." if web_signals.get('cta_visibility') else None
+            )
+            lead_info['spf_status'] = None
+            lead_info['dmarc_status'] = None
+            lead_info['email_quality'] = None
+
             if not email:
+                if lead_type == "no_website":
+                    lead_info['audit_issues'] = "; ".join(audit_issues or [])
+                    lead_info['strategy'] = strategy
+                    lead_info['city'] = query.split(" near ")[-1]
+                    lead_info['niche'] = query.split(" near ")[0]
+                    lead_info['description'] = description
+                    if has_phone_contact(lead_info) and getattr(config, "QUEUE_PHONE_ONLY_LEADS", True):
+                        lead_info['status'] = "manual_queue"
+                        dm.save_lead(lead_info)
+                        dm.record_email_event(
+                            name,
+                            "manual_outreach_candidate",
+                            {
+                                "lead_type": lead_type,
+                                "channel": "phone",
+                                "phone": lead_info.get("phone"),
+                                "reason": "no_email_for_no_website_lead",
+                                "opportunity_score": opportunity_score,
+                            },
+                        )
+                        print(
+                            f"  -> No email found. Queued for manual phone/WhatsApp follow-up "
+                            f"({lead_info.get('phone')})."
+                        )
+                    else:
+                        lead_info['status'] = "no_contact"
+                        dm.save_lead(lead_info)
+                        dm.record_email_event(
+                            name,
+                            "no_contact_method",
+                            {
+                                "lead_type": lead_type,
+                                "reason": "no_email_and_no_phone_for_no_website_lead",
+                                "opportunity_score": opportunity_score,
+                            },
+                        )
+                        print("  -> Skipping: no email and no phone for no-website lead.")
+                    continue
                 print("  -> No email found on site.")
                 # Safe fallback: try common inboxes on the business domain
                 fallback_email = None
@@ -797,21 +1136,33 @@ def main():
                     domain = None
                 if domain:
                     candidates = [f"info@{domain}", f"support@{domain}", f"contact@{domain}", f"hello@{domain}", f"admin@{domain}"]
+                    best_validation = None
                     for cand in candidates:
                         try:
-                            probe_ok = mailer.validate_email_deep(cand, smtp_probe=True)
+                            validation_mailer = smtp_pool.peek_mailer() if smtp_pool else mailer
+                            validation = validation_mailer.assess_email(
+                                cand,
+                                smtp_probe=False,
+                                allow_risky=True,
+                                check_catch_all=False,
+                            )
                         except Exception:
-                            probe_ok = False
-                        if probe_ok:
+                            validation = {"can_send": False, "score": 0, "status": "INVALID"}
+                        if validation.get("can_send"):
                             fallback_email = cand
-                            print(f"  -> Using validated fallback email: {fallback_email}")
+                            print(
+                                f"  -> Using validated fallback email: {fallback_email} "
+                                f"(score={validation.get('score')})"
+                            )
                             break
-                        # DNS-only fallback
-                        dns_ok = mailer.validate_email_deep(cand, smtp_probe=False)
-                        if dns_ok:
-                            fallback_email = cand
-                            print(f"  -> Using DNS-resolved fallback email: {fallback_email}")
-                            break
+                        if not best_validation or validation.get("score", 0) > best_validation.get("score", 0):
+                            best_validation = dict(validation)
+                            best_validation["email"] = cand
+                    if not fallback_email and best_validation and best_validation.get("score", 0) >= 50:
+                        print(
+                            f"  -> Only risky fallback emails found for {name}; "
+                            f"best candidate {best_validation.get('email')} scored {best_validation.get('score')}."
+                        )
                 if not fallback_email:
                     print("  -> Skipping: no recipient email available.")
                     lead_info['strategy'] = strategy
@@ -826,62 +1177,184 @@ def main():
                 
             # Update Lead Object
             lead_info['email'] = email
-            lead_info['audit_issues'] = "; ".join(audit_issues)
+            if isinstance(audit_issues, str):
+                lead_info['audit_issues'] = audit_issues
+            else:
+                lead_info['audit_issues'] = "; ".join(audit_issues or [])
             lead_info['strategy'] = strategy
             lead_info['city'] = query.split(" near ")[-1]
             lead_info['niche'] = query.split(" near ")[0]
+            lead_info['description'] = description
             
             # Save to DB
             dm.save_lead(lead_info)
+            if lead_type == "no_website":
+                dm.record_email_event(
+                    name,
+                    "no_website_scored",
+                    {
+                        "lead_type": lead_type,
+                        "opportunity_score": opportunity_score,
+                        "email_available": bool(email),
+                        "phone_available": has_phone_contact(lead_info),
+                    },
+                )
             
             # 6. Email Generation (with personalization)
             time.sleep(random.uniform(1.2, 2.8))
             
             # Parse reviews from JSON
             import json
-            reviews_list = json.loads(sample_reviews) if sample_reviews else []
-            
-            subject, body = llm_helper.generate_email_content(
-                name, 
-                lead_info['niche'], 
-                lead_info['city'], 
-                strategy, 
-                audit_issues,
-                description=description,
-                reviews=reviews_list,
-                first_name=first_name
-            )
-            # Quality gate
-            score = 0
-            try:
-                score = llm_helper.score_email(subject, body)
-            except Exception:
-                score = 3
-            tone = "A"
-            try:
-                tone = llm_helper.qa_tone(subject, body)
-            except Exception:
-                tone = "A"
-            if llm_helper.has_banned_phrases(subject) or llm_helper.has_banned_phrases(body) or score < 3 or tone == "B":
-                subject, body = llm_helper.generate_email_content(
-                    name, 
-                    lead_info['niche'], 
-                    lead_info['city'], 
-                    strategy, 
-                    audit_issues,
-                    description=description,
-                    reviews=reviews_list,
-                    first_name=first_name
+            reviews_list = []
+            if sample_reviews:
+                if isinstance(sample_reviews, str):
+                    try:
+                        reviews_list = json.loads(sample_reviews)
+                    except json.JSONDecodeError:
+                        reviews_list = [sample_reviews]
+                elif isinstance(sample_reviews, (list, tuple)):
+                    reviews_list = list(sample_reviews)
+
+            peer_competitors = []
+            for peer in leads_sorted:
+                peer_name = peer.get("business_name")
+                if not peer_name or peer_name == name:
+                    continue
+                peer_competitors.append({
+                    "business_name": peer_name,
+                    "website": peer.get("website"),
+                    "rating": peer.get("rating"),
+                })
+                if len(peer_competitors) >= 3:
+                    break
+
+            competitor_references = ", ".join([peer.get("business_name") for peer in peer_competitors if peer.get("business_name")])
+            lead_info['competitors'] = peer_competitors
+            lead_info['competitor_references'] = competitor_references
+            if peer_competitors:
+                dm.save_lead(lead_info)
+
+            recent_personas = dm.get_recent_personas(name)
+            past_outcomes = dm.get_recent_outcomes(name)
+            review_snippet = reviews_list[0] if reviews_list else ""
+            review_sentiment = lead_info.get('review_sentiment') or (
+                f"{rating}-star average from {reviews} reviews" if rating and reviews else (
+                    f"{rating}-star average" if rating else (f"{reviews} reviews" if reviews else "")
                 )
+            )
+            website_issue = audit_issues[0] if audit_issues else ""
+            good_fit_reason = (
+                f"Because {name} already has local momentum in {lead_info.get('city') or 'your area'}, this outreach can help turn more Maps interest into booked work."
+                if lead_info.get('city') else f"Because {name} already has local momentum, this outreach can help turn more Maps interest into booked work."
+            )
+            unique_value = (
+                f"Helping {name} convert Google Maps visits into booked jobs with one simple website or listing improvement."
+                if website else f"Helping {name} capture local demand even without a website by making the first contact path clearer and faster."
+            )
+            lead_context = {
+                "business_name": name,
+                "first_name": first_name,
+                "industry": lead_info["niche"],
+                "city": lead_info["city"],
+                "lead_type": lead_type,
+                "website": website,
+                "email": email,
+                "phone": lead_info.get("phone"),
+                "rating": rating,
+                "review_count": reviews,
+                "description": description,
+                "audit_issues": audit_issues,
+                "reviews": reviews_list,
+                "review_snippet": review_snippet,
+                "review_sentiment": review_sentiment,
+                "service_offerings": lead_info.get("service_offerings"),
+                "review_excerpt": lead_info.get("review_excerpt") or review_snippet,
+                "local_market_signal": lead_info.get("local_market_signal"),
+                "competitor_references": lead_info.get("competitor_references"),
+                "homepage_cta_quality": lead_info.get("homepage_cta_quality"),
+                "website_issue": website_issue,
+                "good_fit_reason": good_fit_reason,
+                "unique_value": unique_value,
+                "competitors": peer_competitors,
+                "website_signals": web_signals,
+                "pagespeed_score": pagespeed_score,
+                "opportunity_score": opportunity_score,
+                "open_count": lead_info.get("open_count") or 0,
+                "last_opened_at": lead_info.get("last_opened_at"),
+                "past_outcomes": past_outcomes,
+                "persona_history": recent_personas,
+            }
+            dm.record_email_event(name, "prompt_payload", {"prompt_payload": lead_context})
+            if lead_type == "no_website":
+                strategy_event = "no_website_prompt_strategy_generated"
+                retry_event = "no_website_prompt_quality_retry"
+            else:
+                strategy_event = "website_prompt_strategy_generated"
+                retry_event = "website_prompt_quality_retry"
+
+            outreach_result = None
+            for attempt in range(3):
                 try:
-                    score = llm_helper.score_email(subject, body)
-                except Exception:
-                    score = 3
-            if score < 3 or llm_helper.has_banned_phrases(subject) or llm_helper.has_banned_phrases(body) or llm_helper.qa_tone(subject, body) == "B":
-                log("email_quality_reject", name=name, score=score)
-                dm.record_email_event(name, "quality_reject", {"score": score})
+                    outreach_result = llm_helper.generate_maps_cold_email(lead_context)
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        log("llm_generation_retry", name=name, attempt=attempt + 1, error=str(e))
+                        continue
+                    log("llm_generation_failed", name=name, error=str(e))
+                    dm.record_email_event(name, "llm_generation_failed", {"error": str(e), "attempts": 3})
+                    outreach_result = None
+            if outreach_result is None:
                 continue
-            
+
+            subject = outreach_result.get("subject") or f"Quick note about {name}"
+            body = outreach_result.get("email") or ""
+            quality_result = llm_helper.evaluate_structured_email_quality(body, lead_context, lead_type == "has_website", persona_name=outreach_result.get("persona"))
+            if quality_result.get("issues"):
+                dm.record_email_event(name, "llm_quality_warning", {
+                    "provider": outreach_result.get("provider"),
+                    "persona": outreach_result.get("persona"),
+                    "score": quality_result.get("score"),
+                    "issues": quality_result.get("issues"),
+                })
+
+            # 4. Persona Throttle (from send_10_emails.py)
+            persona = outreach_result.get("persona")
+            if persona and dm.count_daily_actions_for_persona(persona) >= config.MAX_PERSONA_SENDS_PER_DAY:
+                print(f"  -> Skipping {name}: reached daily persona throttle for {persona}.")
+                continue
+            # ----------------------------------------------
+
+            dm.record_email_event(name, "persona_selected", {
+                "provider": outreach_result.get("provider"),
+                "persona": outreach_result.get("persona"),
+                "lead_type": lead_type,
+                "hook_type": outreach_result.get("hook_type"),
+            })
+            dm.record_email_event(name, "email_generated", {
+                "provider": outreach_result.get("provider"),
+                "persona": outreach_result.get("persona"),
+                "subject": subject,
+                "lead_type": lead_type,
+                "hook_type": outreach_result.get("hook_type"),
+                "analysis_provider": outreach_result.get("analysis_provider"),
+            })
+            dm.record_email_event(
+                name,
+                strategy_event,
+                {
+                    "lead_type": lead_type,
+                    "opportunity_score": opportunity_score,
+                    "persona": outreach_result.get("persona"),
+                    "hook_type": outreach_result.get("hook_type"),
+                    "observations": outreach_result.get("observations"),
+                    "problems": outreach_result.get("problems"),
+                    "strategy": outreach_result.get("strategy"),
+                    "insight": outreach_result.get("insight"),
+                    "analysis_provider": outreach_result.get("analysis_provider"),
+                    "provider": outreach_result.get("provider"),
+                },
+            )
             # Send
             sent = False
             import datetime
@@ -896,6 +1369,7 @@ def main():
                 in_window = True
             if config.DRY_RUN:
                 log("dry_send_preview", to=email, subject=subject, body_preview=body[:200])
+                dm.record_email_event(name, "dry_preview", {"to": email, "subject": subject})
                 sent = True # Simulate success
             else:
                 if not in_window:
@@ -903,45 +1377,118 @@ def main():
                     dm.record_email_event(name, "skipped_window", {"to": email})
                     continue
                 
-                mailer = mailers[mailer_index % len(mailers)]
-                mailer_index += 1
-                # Deep validation before sending
-                # Prefer SMTP RCPT probe; if blocked, fall back to API + DNS
-                probe_ok = False
-                try:
-                    probe_ok = mailer.validate_email_deep(email, smtp_probe=True)
-                except Exception:
-                    probe_ok = False
-                api_ok = None
-                try:
-                    api_ok = validator.validate_email_api(email)
-                except Exception:
-                    api_ok = None
-                dns_ok = mailer.validate_email_deep(email, smtp_probe=False)
-                
-                can_send = bool(probe_ok) or (api_ok is True) or (dns_ok and api_ok is None)
-                
-                if can_send:
-                    sent = mailer.send_email(email, subject, body, attachment_paths=[screenshot_path] if screenshot_path else None)
+                preferred_mailer = smtp_pool.peek_mailer() if smtp_pool else mailer
+                allow_risky = getattr(config, "ALLOW_RISKY_EMAILS", False)
+                validation_result = preferred_mailer.assess_email(
+                    email,
+                    smtp_probe=False,
+                    allow_risky=allow_risky,
+                    check_catch_all=False,
+                )
+                checks = validation_result.get("checks", {})
+                lead_info["spf_status"] = "valid" if checks.get("spf_valid") else "invalid" if checks.get("spf_valid") is False else None
+                lead_info["dmarc_status"] = validation_result.get("dmarc_policy")
+                lead_info["email_quality"] = validation_result.get("classification") or validation_result.get("status")
+                dm.save_lead(lead_info)
+                log(
+                    "email_validation_result",
+                    to=email,
+                    status=validation_result.get("status"),
+                    score=validation_result.get("score"),
+                    smtp=checks.get("smtp_valid", checks.get("smtp_mailbox_exists")),
+                    spf=checks.get("spf_valid"),
+                    dmarc=validation_result.get("dmarc_policy"),
+                    catch_all=checks.get("catch_all"),
+                    disposable=checks.get("disposable", checks.get("is_disposable")),
+                )
+                dm.record_email_event(
+                    name,
+                    "validation_result",
+                    {
+                        "to": email,
+                        "status": validation_result.get("status"),
+                        "score": validation_result.get("score"),
+                        "checks": checks,
+                        "reasons": validation_result.get("reasons"),
+                    },
+                )
+
+                if validation_result.get("can_send"):
+                    if smtp_pool:
+                        sent = smtp_pool.send_email(
+                            email,
+                            subject,
+                            body,
+                            attachment_paths=[screenshot_path] if screenshot_path else None,
+                            validation_result=validation_result,
+                            preferred_mailer=preferred_mailer,
+                            retries_per_account=1,
+                        )
+                    else:
+                        sent = preferred_mailer.send_email(
+                            email,
+                            subject,
+                            body,
+                            attachment_paths=[screenshot_path] if screenshot_path else None,
+                            validation_result=validation_result,
+                        )
                 else:
-                    print(f"[SMTP] Skipping {email} - Validation failed (probe={probe_ok}, api={api_ok}, dns={dns_ok}).")
-                    log("email_skipped_validation", to=email, probe=probe_ok, api=api_ok, dns=dns_ok)
+                    print(
+                        f"[SMTP] Skipping {email} - Validation failed "
+                        f"(status={validation_result.get('status')}, score={validation_result.get('score')}, "
+                        f"reasons={validation_result.get('reasons')})."
+                    )
+                    log(
+                        "email_skipped_validation",
+                        to=email,
+                        status=validation_result.get("status"),
+                        score=validation_result.get("score"),
+                    )
                     sent = False
                 
-                log("email_sent_result", to=email, sent=bool(sent), from_email=mailer.email)
-                dm.record_email_event(name, "sent" if sent else "failed", {"to": email})
+                from_mailer = smtp_pool.last_used_mailer if smtp_pool and smtp_pool.last_used_mailer else preferred_mailer
+                log("email_sent_result", to=email, sent=bool(sent), from_email=from_mailer.email)
+                dm.record_email_event(name, "email_send_attempt", {
+                    "to": email,
+                    "provider": outreach_result.get("provider"),
+                    "persona": outreach_result.get("persona"),
+                    "hook_type": outreach_result.get("hook_type"),
+                    "sent": bool(sent),
+                })
+                dm.record_email_event(name, "sent" if sent else "failed", {
+                    "to": email,
+                    "provider": outreach_result.get("provider"),
+                    "persona": outreach_result.get("persona"),
+                    "hook_type": outreach_result.get("hook_type"),
+                })
                 try:
-                    dm.record_training_example(name, subject, body, score, tone, "sent" if sent else "failed")
+                    dm.record_training_example(
+                        name,
+                        subject,
+                        body,
+                        quality_result.get("score"),
+                        quality_result.get("tone"),
+                        "sent" if sent else "failed",
+                        persona=outreach_result.get("persona"),
+                        strategy_text=outreach_result.get("strategy"),
+                        insight=outreach_result.get("insight"),
+                    )
                 except Exception:
                     pass
             
             if sent:
-                 dm.log_action(name, "email_sent")
+                 if config.DRY_RUN:
+                     print(f"Dry run preview generated for {name}.")
+                     continue
+                 dm.log_action(name, "email_sent", {"sequence_stage": "initial"})
                  
                  # Human-Like Jitter
-                 wait_time = random.randint(120, 360)
-                 print(f"Email sent to {name}. Waiting {wait_time}s...")
-                 time.sleep(wait_time)
+                 if not getattr(config, "SKIP_JITTER", False):
+                     wait_time = random.randint(120, 360)
+                     print(f"Email sent to {name}. Waiting {wait_time}s...")
+                     time.sleep(wait_time)
+                 else:
+                     print(f"Email sent to {name}. Skipping jitter per config.")
 
                  # Batch Logic
                  emails_sent_in_batch += 1
@@ -963,18 +1510,33 @@ def main():
             if ev.get("type") == "bounce":
                 consecutive_bounces += 1
                 print(f"[ALERT] Bounce detected for {ev.get('email')}!")
-                
+
             email_addr = ev.get("email")
             if email_addr:
                 business = dm.get_business_name_by_email(email_addr)
                 if business:
-                    dm.record_email_event(business, ev.get("type"), ev.get("meta"))
+                    event_meta = ev.get("meta") or {}
+                    last_email_meta = dm.get_last_event_meta(business, ["email_generated", "sent", "email_send_attempt"])
+                    if last_email_meta and not event_meta.get("hook_type"):
+                        hook_type = last_email_meta.get("hook_type")
+                        if hook_type:
+                            event_meta["hook_type"] = hook_type
+                    dm.record_email_event(business, ev.get("type"), event_meta)
+                    if ev.get("type") == "opened":
+                        dm.log_action(business, "opened", event_meta)
+                    elif ev.get("type") in ("reply", "appointment_booked", "sale_closed", "bounce"):
+                        dm.log_action(business, ev.get("type"), event_meta)
+                        if ev.get("type") in ("reply", "appointment_booked", "sale_closed"):
+                            dm.capture_successful_outreach(business)
+                        if ev.get("type") == "bounce" and smtp_pool and smtp_pool.last_used_mailer:
+                            smtp_pool.mark_account_bad(smtp_pool.last_used_mailer, reason="imap_bounce")
                     log("email_outcome_recorded", type=ev.get("type"), email=email_addr, business=business)
-                    try:
-                        dm.set_training_outcome(business, ev.get("type"))
-                    except Exception:
-                        pass
-                        
+                    if ev.get("type") in ("reply", "appointment_booked", "sale_closed", "bounce"):
+                        try:
+                            dm.set_training_outcome(business, ev.get("type"))
+                        except Exception:
+                            pass
+
         if consecutive_bounces >= 3:
             print("\n[CRITICAL] Too many bounces detected (3+). Stopping agent to protect account reputation.")
             log("agent_stopped_safety", reason="excessive_bounces")
@@ -985,7 +1547,7 @@ def main():
                 pass
             print("Agent stopped due to excessive bounces.")
             return
-            
+
     except Exception as e:
         log("imap_processing_error", error=str(e))
                  

@@ -1,0 +1,59 @@
+# DEPLOYMENT FIXES SUMMARY
+
+## Issues Fixed ✅
+
+### 1. **Email Quality Gate (CRITICAL)**
+- Threshold was 2/10 (too permissive) → now 4/10
+- Location: [send_10_emails.py line 176](send_10_emails.py#L176)
+
+### 2. **Exception Handling (HIGH)**
+- Silent failures now show error type
+- Location: [send_10_emails.py lines 150, 171](send_10_emails.py#L150)
+
+### 3. **Validator Threshold (MEDIUM)**
+- INVALID threshold lowered from 60 to 50 (allows RISKY status)
+- Location: [validator.py line 63](validator.py#L63)
+
+### 4. **Validation Debugging (MEDIUM)**
+- Shows WHY emails are rejected
+- Location: [send_10_emails.py line 189](send_10_emails.py#L189)
+
+### 5. **SMTP Account (HIGH)**
+- Removed `wave84@gmail.com` (bad password with space)
+- Location: [.env](.env)
+- Remaining: 4 healthy accounts
+
+---
+
+## Test Results
+
+```
+✓ SMTP connections working
+✓ Quality gate enforcing threshold
+✓ Validation showing reasons
+✓ Error logging showing types
+✗ Database needs leads with emails (run scraper first)
+```
+
+---
+
+## What Still Needs Work
+
+**CRITICAL:** Database has 136 leads but only 1 with email
+
+Run this to extract emails from scraped leads:
+```bash
+python main.py --scrape-only --limit 50
+```
+
+Then emails can be sent:
+```bash
+python send_10_emails.py
+```
+
+---
+
+## Files Changed
+- [send_10_emails.py](send_10_emails.py) — Quality gate, logging, validation debug
+- [validator.py](validator.py) — Threshold adjustment
+- [.env](.env) — Removed bad account

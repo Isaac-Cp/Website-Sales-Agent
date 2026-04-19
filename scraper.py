@@ -1,4 +1,10 @@
-import undetected_chromedriver as uc
+try:
+    import undetected_chromedriver as uc
+    UC_IMPORT_ERROR = None
+except Exception as exc:
+    uc = None
+    UC_IMPORT_ERROR = exc
+from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -23,7 +29,7 @@ class Scraper:
 
     def get_driver(self):
         """Initialize Chrome driver with robust anti-detection settings."""
-        options = uc.ChromeOptions()
+        options = uc.ChromeOptions() if uc is not None else webdriver.ChromeOptions()
         # Performance & CPU Optimizations
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--disable-dev-shm-usage")
@@ -69,61 +75,8 @@ class Scraper:
             # Driver lookup/install logic (OS-aware)
             import os
             import sys
-            driver_path = None
             is_windows = sys.platform.startswith("win")
             os_subdir = "win64" if is_windows else "linux64"
-            
-            try:
-                # 1. Try to find local cached driver
-                wdm_base = os.path.join(os.path.expanduser("~"), ".wdm", "drivers", "chromedriver", os_subdir)
-                if os.path.exists(wdm_base):
-                    # Pick latest version
-                    versions = sorted([d for d in os.listdir(wdm_base) if os.path.isdir(os.path.join(wdm_base, d))], reverse=True)
-                    for v in versions:
-                        if is_windows:
-                            candidates = [
-                                os.path.join(wdm_base, v, "chromedriver.exe"),
-                                os.path.join(wdm_base, v, "chromedriver-win64", "chromedriver.exe"),
-                                os.path.join(wdm_base, v, "chromedriver-win32", "chromedriver.exe")
-                            ]
-                        else:
-                            candidates = [
-                                os.path.join(wdm_base, v, "chromedriver"),
-                                os.path.join(wdm_base, v, "chromedriver-linux64", "chromedriver")
-                            ]
-                            
-                        for c in candidates:
-                            if os.path.exists(c):
-                                driver_path = c
-                                break
-                        if driver_path: break
-            except: pass
-
-            # 2. Network Fallback
-            if not driver_path:
-                try:
-                    from webdriver_manager.core.download_manager import WDMDownloadManager
-                    manager = ChromeDriverManager(download_manager=WDMDownloadManager(CustomHttpClient()))
-                except:
-                    manager = ChromeDriverManager()
-                for attempt in range(3):
-                    try:
-                        print(f"DEBUG: Installing driver (attempt {attempt+1})...")
-                        driver_path = manager.install()
-                        print(f"DEBUG: Driver installed at {driver_path}")
-                        break
-                    except:
-                        time.sleep(2)
-            
-            if not driver_path:
-                print("DEBUG: Using fallback driver path.")
-                driver_path = "chromedriver" if not is_windows else "chromedriver.exe"
-            
-            print("DEBUG: Creating uc.Chrome instance...")
-            # On Linux (Servers), use_subprocess=True is often required for stability
-            # On Windows, use_subprocess=False avoids WinError 6
-            use_sub = True if not is_windows else False
-            
             # Try to get main version dynamically
             v_main = None
             try:
@@ -142,46 +95,96 @@ class Scraper:
                     if m: v_main = int(m.group(1))
             except:
                 pass
+
+            driver_path = None
+
+            def extract_major_from_path(path):
+                if not path:
+                    return None
+                for part in reversed(path.split(os.sep)):
+                    try:
+                        return int(part.split(".")[0])
+                    except Exception:
+                        continue
+                return None
+
+            try:
+                # 1. Try to find a local cached driver that matches the installed Chrome major version.
+                wdm_base = os.path.join(os.path.expanduser("~"), ".wdm", "drivers", "chromedriver", os_subdir)
+                if os.path.exists(wdm_base):
+                    versions = sorted([d for d in os.listdir(wdm_base) if os.path.isdir(os.path.join(wdm_base, d))], reverse=True)
+                    for v in versions:
+                        if v_main and not v.startswith(f"{v_main}."):
+                            continue
+                        if is_windows:
+                            candidates = [
+                                os.path.join(wdm_base, v, "chromedriver.exe"),
+                                os.path.join(wdm_base, v, "chromedriver-win64", "chromedriver.exe"),
+                                os.path.join(wdm_base, v, "chromedriver-win32", "chromedriver.exe")
+                            ]
+                        else:
+                            candidates = [
+                                os.path.join(wdm_base, v, "chromedriver"),
+                                os.path.join(wdm_base, v, "chromedriver-linux64", "chromedriver")
+                            ]
+
+                        for c in candidates:
+                            if os.path.exists(c):
+                                driver_path = c
+                                break
+                        if driver_path:
+                            break
+            except Exception:
+                pass
+
+            print("DEBUG: Creating browser driver instance...")
+            # On Linux (Servers), use_subprocess=True is often required for stability
+            # On Windows, use_subprocess=False avoids WinError 6
+            use_sub = True if not is_windows else False
             
             # Unified Driver Initialization with Fallback
             options.add_argument("--remote-debugging-port=9222")
             
             v_main = v_main or 144
-            print(f"DEBUG: Attempting uc.Chrome (version_main={v_main}, use_subprocess={use_sub})...")
-            
-            try:
-                # Set a strict timeout for UC constructor
-                import threading
-                import queue
-                q = queue.Queue()
+            driver = None
+            if uc is not None:
+                print(f"DEBUG: Attempting uc.Chrome (version_main={v_main}, use_subprocess={use_sub})...")
+                try:
+                    # Set a strict timeout for UC constructor
+                    import threading
+                    import queue
+                    q = queue.Queue()
 
-                def init_uc():
-                    try:
-                        d = uc.Chrome(options=options, use_subprocess=use_sub, version_main=v_main)
-                        q.put(d)
-                    except Exception as e:
-                        q.put(e)
+                    def init_uc():
+                        try:
+                            d = uc.Chrome(options=options, use_subprocess=use_sub, version_main=v_main)
+                            q.put(d)
+                        except Exception as e:
+                            q.put(e)
 
-                t = threading.Thread(target=init_uc)
-                t.daemon = True
-                t.start()
-                t.join(timeout=30)
+                    t = threading.Thread(target=init_uc)
+                    t.daemon = True
+                    t.start()
+                    t.join(timeout=30)
 
-                if q.empty():
-                    print("DEBUG: uc.Chrome timed out. Falling back to standard Selenium.")
-                    raise Exception("UC Timeout")
-                
-                res = q.get()
-                if isinstance(res, Exception):
-                    print(f"DEBUG: uc.Chrome failed: {res}. Falling back to standard Selenium.")
-                    raise res
-                
-                self.driver = res
-                print("DEBUG: uc.Chrome initialized successfully.")
+                    if q.empty():
+                        print("DEBUG: uc.Chrome timed out. Falling back to standard Selenium.")
+                        raise Exception("UC Timeout")
 
-            except Exception:
+                    res = q.get()
+                    if isinstance(res, Exception):
+                        print(f"DEBUG: uc.Chrome failed: {res}. Falling back to standard Selenium.")
+                        raise res
+
+                    driver = res
+                    print("DEBUG: uc.Chrome initialized successfully.")
+                except Exception:
+                    driver = None
+            else:
+                print(f"DEBUG: undetected_chromedriver unavailable ({UC_IMPORT_ERROR}). Falling back to standard Selenium.")
+
+            if driver is None:
                 print("DEBUG: Falling back to standard Selenium driver...")
-                from selenium import webdriver
                 from selenium.webdriver.chrome.service import Service
                 
                 # Re-clean options for standard selenium (some UC ones might conflict)
@@ -193,36 +196,57 @@ class Scraper:
                 std_options.add_argument("--disable-gpu")
                 
                 try:
-                    # Use the path we verified exists if available
                     if driver_path and os.path.exists(driver_path):
-                        service = Service(driver_path)
-                    else:
-                        service = Service(ChromeDriverManager().install())
-                    
-                    self.driver = webdriver.Chrome(service=service, options=std_options)
-                    print("DEBUG: Standard Selenium initialized.")
+                        cached_major = extract_major_from_path(driver_path)
+                        if v_main and cached_major and cached_major != v_main:
+                            print(f"DEBUG: Cached driver major {cached_major} does not match Chrome {v_main}. Ignoring cache.")
+                            driver_path = None
+
+                    # First try Selenium Manager so it can fetch a browser-matched driver.
+                    try:
+                        driver = webdriver.Chrome(options=std_options)
+                        print("DEBUG: Standard Selenium initialized via Selenium Manager.")
+                    except Exception as selenium_manager_error:
+                        print(f"DEBUG: Selenium Manager fallback failed: {selenium_manager_error}")
+                        if driver_path and os.path.exists(driver_path):
+                            service = Service(driver_path)
+                        else:
+                            try:
+                                from webdriver_manager.core.download_manager import WDMDownloadManager
+                                manager = ChromeDriverManager(
+                                    driver_version=str(v_main) if v_main else None,
+                                    download_manager=WDMDownloadManager(CustomHttpClient())
+                                )
+                            except Exception:
+                                manager = ChromeDriverManager(driver_version=str(v_main) if v_main else None)
+                            print("DEBUG: Downloading a matching ChromeDriver with webdriver_manager...")
+                            service = Service(manager.install())
+
+                        driver = webdriver.Chrome(service=service, options=std_options)
+                        print("DEBUG: Standard Selenium initialized via explicit driver service.")
                 except Exception as e:
                     print(f"DEBUG: Critical failure - even standard driver failed: {e}")
                     raise
 
-            driver = self.driver
+            self.driver = driver
             driver.set_page_load_timeout(30)
             driver.implicitly_wait(5)
-            return driver
             
             # Execute anti-detection scripts
-            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                "source": """
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-                    Object.defineProperty(navigator, 'plugins', {
-                        get: () => [1, 2, 3, 4, 5]
-                    });
-                """
-            })
-            
-            self.driver = driver
+            try:
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": """
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined
+                        });
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1, 2, 3, 4, 5]
+                        });
+                    """
+                })
+            except Exception as e:
+                print(f"DEBUG: Anti-detection script skipped: {e}")
+
             return driver
             
         except Exception as e:
@@ -265,7 +289,7 @@ class Scraper:
     def scrape_google_maps(self, driver, query):
         """
         Scrapes Google Maps for a given query with robust error handling.
-        Returns a list of dicts with {business_name, website, location, phone}.
+        Returns a list of dicts with {business_name, website, phone, address, location, rating, review_count, description, sample_reviews}.
         """
         print(f"Navigating to Maps for query: {query}")
         
@@ -437,6 +461,32 @@ class Scraper:
         
         leads = []
         try:
+            import re
+
+            def normalize_name(value):
+                return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+            def names_match(expected, actual):
+                expected_norm = normalize_name(expected)
+                actual_norm = normalize_name(actual)
+                return bool(expected_norm and actual_norm and (expected_norm in actual_norm or actual_norm in expected_norm))
+
+            def get_detail_name():
+                selectors = [
+                    "h1.DUwDvf",
+                    "div[role='main'] h1",
+                    "h1",
+                ]
+                for selector in selectors:
+                    try:
+                        for header in driver.find_elements(By.CSS_SELECTOR, selector):
+                            text = (header.text or "").strip()
+                            if text:
+                                return text
+                    except Exception:
+                        continue
+                return None
+
             items = []
             item_selectors = [
                 "div[role='article']",
@@ -466,6 +516,8 @@ class Scraper:
             print(f"Found {len(items)} potential listings.")
             
             for i, item in enumerate(items):
+                original_window = driver.current_window_handle
+                detail_window = None
                 try:
                     name = item.get_attribute("aria-label")
                     if not name:
@@ -477,19 +529,44 @@ class Scraper:
                         continue
                         
                     print(f"Inspecting: {name}")
+                    detail_href = None
                     try:
-                        driver.execute_script("arguments[0].click();", item)
-                    except:
+                        detail_href = item.get_attribute("href")
+                    except Exception:
+                        detail_href = None
+                    if not detail_href:
                         try:
-                            link = item.find_element(By.CSS_SELECTOR, "a.hfpxzc, a[href]")
-                            driver.execute_script("arguments[0].click();", link)
-                        except:
-                            item.click()
-                    time.sleep(3)  # Increased wait for detail pane to load
+                            link = item.find_element(By.CSS_SELECTOR, "a.hfpxzc, a[href*='/maps/place']")
+                            detail_href = link.get_attribute("href")
+                        except Exception:
+                            detail_href = None
+
+                    if not detail_href:
+                        print(f"  Skipping {name}: no detail link found.")
+                        continue
+
+                    try:
+                        existing_handles = set(driver.window_handles)
+                        driver.execute_script("window.open(arguments[0], '_blank');", detail_href)
+                        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > len(existing_handles))
+                        detail_window = next(handle for handle in driver.window_handles if handle not in existing_handles)
+                        driver.switch_to.window(detail_window)
+                    except Exception as e:
+                        print(f"  Failed to open detail page for {name}: {e}")
+                        continue
+
+                    try:
+                        WebDriverWait(driver, 12).until(lambda d: names_match(name, get_detail_name()))
+                    except Exception:
+                        detail_name = get_detail_name()
+                        print(f"  Detail pane mismatch for {name}. Saw: {detail_name}")
+                        continue
                     
                     # Initialize variables
                     website = None
+                    email = None
                     phone = None
+                    address = None
                     rating = 0.0
                     review_count = 0
                     description = None
@@ -503,26 +580,138 @@ class Scraper:
                         
                         # Extract Website (scoped to detail pane)
                         try:
-                            # Method 1: Look for data-item-id='authority'
-                            website_btn = detail_pane.find_element(By.CSS_SELECTOR, "a[data-item-id='authority']")
-                            website = website_btn.get_attribute("href")
+                            website_selectors = [
+                                "a[data-item-id='authority']",
+                                "a[aria-label*='Website']",
+                                "a[aria-label*='website']",
+                            ]
+                            for selector in website_selectors:
+                                website_btns = detail_pane.find_elements(By.CSS_SELECTOR, selector)
+                                if website_btns:
+                                    website = website_btns[0].get_attribute("href")
+                                    if website:
+                                        break
                         except:
-                            # Method 2: Look for link with "Website" text
+                            pass
+
+                        # Extract Email directly from Maps detail pane
+                        try:
+                            email_selectors = [
+                                "a[href^='mailto:']",
+                                "a[aria-label*='Email']",
+                                "a[aria-label*='email']",
+                                "button[aria-label*='Email']",
+                                "button[aria-label*='email']",
+                            ]
+                            for selector in email_selectors:
+                                try:
+                                    email_elements = detail_pane.find_elements(By.CSS_SELECTOR, selector)
+                                except Exception:
+                                    continue
+                                for element in email_elements:
+                                    href = (element.get_attribute("href") or "").strip()
+                                    if href.startswith("mailto:"):
+                                        email = href.replace("mailto:", "").split("?")[0].strip()
+                                        break
+                                    text = (element.get_attribute("aria-label") or element.text or "").strip()
+                                    match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
+                                    if match:
+                                        email = match.group(0).strip()
+                                        break
+                                if email:
+                                    break
+                            if not email:
+                                body_text = detail_pane.text
+                                match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", body_text)
+                                if match:
+                                    email = match.group(0).strip()
+                        except:
+                            pass
+
+                        # Extract Phone
+                        try:
+                            phone_selectors = [
+                                "a[href^='tel:']",
+                                "button[aria-label*='Call']",
+                                "button[aria-label*='call']",
+                                "a[aria-label*='Call']",
+                                "a[aria-label*='call']",
+                                "button[data-item-id='phone']",
+                                "a[data-item-id='phone']",
+                            ]
+                            for selector in phone_selectors:
+                                try:
+                                    elements = detail_pane.find_elements(By.CSS_SELECTOR, selector)
+                                except Exception:
+                                    continue
+                                for element in elements:
+                                    href = (element.get_attribute("href") or "").strip()
+                                    text = (element.get_attribute("aria-label") or element.text or "").strip()
+                                    if href.startswith("tel:"):
+                                        phone = href.replace("tel:", "").split("?")[0].strip()
+                                        break
+                                    if "call" in text.lower():
+                                        match = re.search(r"(\+?\d[\d\s().-]{6,}\d)", text)
+                                        if match:
+                                            phone = match.group(1).strip()
+                                            break
+                                if phone:
+                                    break
+                        except:
+                            pass
+
+                        # Method 2: Look for a link explicitly marked as the business website.
+                        if not website:
                             try:
                                 links = detail_pane.find_elements(By.CSS_SELECTOR, "a[href^='http']")
                                 for link in links:
-                                    href = link.get_attribute("href")
-                                    text = link.text.lower()
-                                    # Exclude Google/Maps links
-                                    if ("google" not in href and "waze" not in href and 
-                                        ("website" in text or "site" in text or len(text) == 0)):
+                                    href = (link.get_attribute("href") or "").strip()
+                                    if not href:
+                                        continue
+
+                                    href_lower = href.lower()
+                                    text = (link.text or "").lower()
+                                    aria = (link.get_attribute("aria-label") or "").lower()
+                                    item_id = (link.get_attribute("data-item-id") or "").lower()
+
+                                    if "google." in href_lower or "waze.com" in href_lower or "/maps/" in href_lower:
+                                        continue
+
+                                    if "authority" in item_id or "website" in text or "website" in aria:
                                         website = href
                                         break
-                            except:
+                            except Exception:
                                 pass
                         
+                        # Extract Address / Location
+                        try:
+                            address_selectors = [
+                                "button[aria-label*='Address']",
+                                "a[aria-label*='Address']",
+                                "div[data-item-id='address']",
+                                "button[data-item-id='address']",
+                                "div[aria-label*='Address']",
+                                "span[aria-label*='Address']",
+                            ]
+                            for selector in address_selectors:
+                                try:
+                                    elements = detail_pane.find_elements(By.CSS_SELECTOR, selector)
+                                except Exception:
+                                    continue
+                                if elements:
+                                    text_value = (elements[0].text or "").strip()
+                                    if text_value:
+                                        address = text_value
+                                        break
+                            if not address:
+                                text_content = detail_pane.text
+                                match = re.search(r"Address[:\u00A0]?\s*(.+?)(?:\n|$)", text_content, re.IGNORECASE)
+                                if match:
+                                    address = match.group(1).strip()
+                        except:
+                            pass
+
                         # Extract Rating and Review Count
-                        import re
                         try:
                             # Method 1: Find star rating aria-label
                             star_els = detail_pane.find_elements(By.CSS_SELECTOR, "span[aria-label*='stars'], span[aria-label*='star']")
@@ -592,14 +781,17 @@ class Scraper:
                     leads.append({
                         "business_name": name,
                         "website": website,
-                        "phone": "N/A", 
+                        "email": email,
+                        "phone": phone or "N/A",
+                        "address": address,
+                        "location": address,
                         "rating": rating,
                         "review_count": review_count,
                         "description": description,
                         "sample_reviews": reviews_json,
                         "source": "maps"
                     })
-                    print(f"  ✓ {name} | Web: {website} | {rating}* ({review_count} reviews) | Desc: {description}")
+                    print(f"  [FOUND] {name} | Web: {website} | {rating}* ({review_count} reviews) | Desc: {description}")
 
                     if len(leads) >= 10: # Limit
                         break
@@ -607,6 +799,16 @@ class Scraper:
                 except Exception as e:
                     print(f"Error parsing item {i}: {e}")
                     continue
+                finally:
+                    if detail_window:
+                        try:
+                            driver.close()
+                        except Exception:
+                            pass
+                        try:
+                            driver.switch_to.window(original_window)
+                        except Exception:
+                            pass
                     
         except Exception as e:
             print(f"Error parsing feed: {e}")
@@ -632,6 +834,29 @@ class Scraper:
             "website_mobile_friendly": True,
             "cta_visibility": "unclear",
             "contact_method": "unclear",
+            "page_title": None,
+            "meta_description": None,
+            "headline": None,
+            "services": [],
+            "service_pages": [],
+            "cta_labels": [],
+            "trust_markers": [],
+            "homepage_summary": None,
+            "phone_numbers": [],
+            "whatsapp_links": [],
+            "secondary_emails": [],
+            "email_candidates": [],
+            "primary_email": None,
+            "pricing_mention": None,
+            "booking_widget": None,
+            "operating_hours": None,
+            "location_count": 0,
+            "staff_count": None,
+            "business_size": None,
+            "google_business_profile_status": None,
+            "review_velocity": None,
+            "keyword_usage": [],
+            "ssl_https": True,
         }
         
         try:
@@ -691,7 +916,239 @@ class Scraper:
                 return None, [], signals
                 
             soup = BeautifulSoup(response.text, "html.parser")
-            
+            links = soup.find_all("a", href=True)
+
+            def _clean_fragment(value, limit=160):
+                text = re.sub(r"\s+", " ", str(value or "")).strip()
+                if not text:
+                    return None
+                if len(text) <= limit:
+                    return text
+                return text[: limit - 3].rsplit(" ", 1)[0] + "..."
+
+            def _dedupe_fragments(values, limit=5):
+                out = []
+                seen = set()
+                for value in values:
+                    cleaned = _clean_fragment(value, 90)
+                    if not cleaned:
+                        continue
+                    key = cleaned.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(cleaned)
+                    if len(out) >= limit:
+                        break
+                return out
+
+            page_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+            title_text = soup.title.get_text(" ", strip=True) if soup.title else None
+            meta_desc = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
+            heading_texts = [
+                tag.get_text(" ", strip=True)
+                for tag in soup.find_all(["h1", "h2"])[:10]
+                if tag.get_text(" ", strip=True)
+            ]
+            service_candidates = []
+            for heading in heading_texts[1:]:
+                lower_heading = heading.lower()
+                if any(skip in lower_heading for skip in ["home", "about", "contact", "blog", "review"]):
+                    continue
+                if 2 <= len(heading.split()) <= 8:
+                    service_candidates.append(heading)
+
+            for link in links[:60]:
+                label = (
+                    link.get_text(" ", strip=True)
+                    or link.get("aria-label")
+                    or link.get("title")
+                    or ""
+                ).strip()
+                lower_label = label.lower()
+                if 1 < len(label.split()) <= 6 and any(
+                    token in lower_label
+                    for token in [
+                        "service",
+                        "repair",
+                        "installation",
+                        "maintenance",
+                        "replacement",
+                        "emergency",
+                        "commercial",
+                        "residential",
+                        "quote",
+                    ]
+                ):
+                    service_candidates.append(label)
+
+            cta_candidates = []
+            for element in soup.find_all(["a", "button"])[:80]:
+                label = (
+                    element.get_text(" ", strip=True)
+                    or element.get("aria-label")
+                    or element.get("title")
+                    or ""
+                ).strip()
+                lower_label = label.lower()
+                if any(
+                    token in lower_label
+                    for token in [
+                        "call",
+                        "book",
+                        "quote",
+                        "contact",
+                        "schedule",
+                        "estimate",
+                        "emergency",
+                        "request",
+                    ]
+                ):
+                    cta_candidates.append(label)
+
+            trust_candidates = []
+            for marker in [
+                "licensed",
+                "insured",
+                "same-day",
+                "24/7",
+                "family-owned",
+                "locally owned",
+                "certified",
+                "guarantee",
+                "years of experience",
+            ]:
+                if marker in page_text.lower():
+                    trust_candidates.append(marker)
+
+            summary_parts = []
+            for tag in soup.find_all(["p", "li"])[:40]:
+                snippet = _clean_fragment(tag.get_text(" ", strip=True), 180)
+                if not snippet:
+                    continue
+                if len(snippet.split()) < 8 or len(snippet.split()) > 35:
+                    continue
+                if re.search(r"cookie|privacy|copyright|all rights reserved", snippet, re.I):
+                    continue
+                summary_parts.append(snippet)
+                if len(summary_parts) >= 2:
+                    break
+
+            signals["page_title"] = _clean_fragment(title_text, 120)
+            signals["meta_description"] = _clean_fragment(
+                meta_desc.get("content") if meta_desc else None,
+                180,
+            )
+            signals["headline"] = _clean_fragment(heading_texts[0] if heading_texts else None, 120)
+            signals["services"] = _dedupe_fragments(service_candidates, limit=6)
+            signals["cta_labels"] = _dedupe_fragments(cta_candidates, limit=5)
+            signals["trust_markers"] = _dedupe_fragments(trust_candidates, limit=5)
+            signals["homepage_summary"] = _clean_fragment(" ".join(summary_parts), 320)
+
+            # Contact + enrichment discovery
+            emails = set()
+            phones = set()
+            whatsapp = set()
+            service_pages = []
+            location_links = set()
+
+            for link in links[:120]:
+                href = link.get('href', '').strip()
+                label = (
+                    link.get_text(' ', strip=True)
+                    or link.get('aria-label')
+                    or link.get('title')
+                    or href
+                ).strip()
+                lower_href = href.lower()
+                lower_label = label.lower()
+
+                if lower_href.startswith('mailto:'):
+                    candidate = href.split('mailto:')[1].split('?')[0].strip()
+                    if candidate:
+                        emails.add(candidate)
+                if '@' in lower_href and not lower_href.startswith('mailto:'):
+                    candidate = href.split('@')[-2].split('/')[-1] + '@' + href.split('@')[-1]
+                    emails.add(candidate)
+                if lower_href.startswith('tel:'):
+                    phones.add(href.split('tel:')[1].split('?')[0].strip())
+                if 'wa.me' in lower_href or 'whatsapp.com' in lower_href:
+                    whatsapp.add(href)
+                if any(token in lower_href or token in lower_label for token in ['service', 'services', 'repair', 'installation', 'maintenance', 'replacement', 'quote']):
+                    service_pages.append(label or href)
+                if 'location' in lower_href or 'locations' in lower_label:
+                    location_links.add(label or href)
+
+            for match in re.findall(r"[\w\.-]+@[\w\.-]+\.\w+", page_text):
+                emails.add(match)
+
+            for match in re.findall(r"\+?\d[\d\-\s()]{6,}\d", page_text):
+                phones.add(match.strip())
+
+            signals['email_candidates'] = sorted(emails)
+            if emails:
+                signals['primary_email'] = sorted(emails)[0]
+                signals['secondary_emails'] = sorted(emails)[1:]
+            signals['phone_numbers'] = sorted(phones)
+            signals['whatsapp_links'] = sorted(whatsapp)
+            signals['service_pages'] = _dedupe_fragments(service_pages, limit=6)
+            signals['location_count'] = len(location_links)
+
+            if any(keyword in page_text.lower() for keyword in ['pricing', 'price', 'estimate', 'rates', 'cost', 'quote']):
+                signals['pricing_mention'] = 'pricing-related language found'
+
+            if any(widget in response.text.lower() for widget in ['calendly.com', 'acuityscheduling.com', 'setmore.com', 'square.site', 'tock.to', 'wheniwork.com', 'booksy.com', 'meetings.hubspot.com', 'hubspot.com/meetings']):
+                signals['booking_widget'] = 'scheduling widget detected'
+            elif any(token in page_text.lower() for token in ['book online', 'schedule online', 'appointment online', 'request a quote', 'book now']):
+                signals['booking_widget'] = 'booking CTA detected'
+
+            hours_matches = re.findall(r"((?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*[:\-]?\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:[-–to]+)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", page_text, re.I)
+            if hours_matches:
+                signals['operating_hours'] = '; '.join(hours_matches[:3])
+
+            staff_match = re.search(r"(?:team of|staff of|crew of|family of)\s+(\d{1,3})", page_text, re.I)
+            if staff_match:
+                try:
+                    signals['staff_count'] = int(staff_match.group(1))
+                except Exception:
+                    signals['staff_count'] = None
+
+            if signals.get('staff_count') is not None:
+                staff_count = signals['staff_count']
+                if staff_count >= 20:
+                    signals['business_size'] = 'medium'
+                elif staff_count >= 5:
+                    signals['business_size'] = 'small team'
+                else:
+                    signals['business_size'] = 'micro business'
+            elif signals['location_count'] > 1:
+                signals['business_size'] = 'multi-location'
+            else:
+                signals['business_size'] = 'local service business'
+
+            if any(token in page_text.lower() for token in ['google business profile', 'google maps', 'find us on google', 'gmb']):
+                signals['google_business_profile_status'] = 'likely_listed'
+
+            if re.search(r"(?:this month|last month|in the last 30 days|202[0-9])", page_text, re.I):
+                signals['review_velocity'] = 'recent activity'
+
+            keyword_set = [
+                'booking', 'pricing', 'estimate', 'review', 'google', 'maps', 'yelp', 'call', 'contact', 'service', 'emergency', 'licensed', 'insured', '24/7'
+            ]
+            signals['keyword_usage'] = [kw for kw in keyword_set if kw in page_text.lower()]
+
+            if response.url.startswith('https://'):
+                signals['ssl_https'] = True
+            else:
+                signals['ssl_https'] = False
+
+            if signals['primary_email']:
+                signals['contact_method'] = 'email'
+            if signals['phone_numbers']:
+                signals['contact_method'] = 'phone' if signals['contact_method'] == 'unclear' else f"{signals['contact_method']}/phone"
+            if soup.find('form'):
+                signals['contact_method'] = 'form' if signals['contact_method'] == 'unclear' else f"{signals['contact_method']}/form"
+
             # 1. Audit: Speed (New)
             if load_time > 3.5:
                 audit_issues.append(f"Slow page load time ({round(load_time, 1)}s).")
@@ -714,7 +1171,6 @@ class Scraper:
             
             # 5. Audit: Broken Links (New)
             # Check up to 5 internal links
-            links = soup.find_all('a', href=True)
             internal_links = []
             base_domain = urlparse(url).netloc
             

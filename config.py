@@ -8,6 +8,7 @@ load_dotenv()
 # --- Security & API Keys ---
 # CRITICAL: Never hardcode keys. They must be in the .env file.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = "llama-3.3-70b-versatile"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 YELP_API_KEY = os.getenv("YELP_API_KEY")
 APOLLO_API_KEY = os.getenv("APOLLO_API_KEY")
@@ -27,6 +28,12 @@ SMTP_EMAIL = os.getenv("SMTP_EMAIL")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", 12))
+SMTP_SSL_BYPASS_HOSTS = [
+    host.strip().lower()
+    for host in os.getenv("SMTP_SSL_BYPASS_HOSTS", "").split(",")
+    if host.strip()
+]
 
 # --- IMAP Settings (for tracking bounces/replies) ---
 IMAP_HOST = os.getenv("IMAP_HOST", "imap.gmail.com")
@@ -39,8 +46,25 @@ EMAIL_WINDOW_END = os.getenv("EMAIL_WINDOW_END", "23:59")
 def get_smtp_accounts():
     """
     Returns a list of SMTP accounts.
-    Supports loading from SMTP_ACCOUNTS_JSON env var or single account from .env.
+    Supports loading from SMTP_ACCOUNTS (comma-separated), SMTP_ACCOUNTS_JSON env var, or single account from .env.
     """
+    # 1. Check for comma-separated string format
+    accounts_str = os.getenv("SMTP_ACCOUNTS")
+    if accounts_str:
+        accounts = []
+        for entry in accounts_str.split(","):
+            parts = entry.strip().split(":")
+            if len(parts) == 4:
+                accounts.append({
+                    "email": parts[0],
+                    "password": parts[1],
+                    "server": parts[2],
+                    "port": int(parts[3])
+                })
+        if accounts:
+            return accounts
+
+    # 2. Check for JSON format
     accounts_json = os.getenv("SMTP_ACCOUNTS_JSON")
     if accounts_json:
         try:
@@ -48,6 +72,7 @@ def get_smtp_accounts():
         except json.JSONDecodeError:
             print("WARNING: Invalid JSON in SMTP_ACCOUNTS_JSON. Falling back to single account.")
             
+    # 3. Fallback to single account
     if SMTP_EMAIL and SMTP_PASSWORD:
         return [{
             "email": SMTP_EMAIL,
@@ -62,7 +87,7 @@ def validate_config():
     issues = []
     if not GROQ_API_KEY and not OPENAI_API_KEY:
         issues.append("Missing LLM API Keys (GROQ_API_KEY or OPENAI_API_KEY)")
-    if not SMTP_EMAIL or not SMTP_PASSWORD:
+    if not get_smtp_accounts():
         issues.append("Missing SMTP Credentials")
     return issues
 
@@ -71,10 +96,14 @@ if not GROQ_API_KEY and not OPENAI_API_KEY:
 
 # --- Runtime Settings ---
 DRY_RUN = False  # Emails will be sent if in window
+ALLOW_RISKY_EMAILS = os.getenv("ALLOW_RISKY_EMAILS", "False").lower() == "true"
 HEADLESS = True  # Headless for reliability in automated runs
 LOG_FILE = "activity.log"
-SESSION_QUERIES = 6
+SESSION_QUERIES = 20
 PARALLEL_WORKERS = 6
+SKIP_JITTER = True
+BATCH_SIZE = 100
+BATCH_DELAY_MINUTES = 1
 FASTAPI_PORT = int(os.getenv("PORT", os.getenv("FASTAPI_PORT", 8000)))
 DATABASE_URL = os.getenv("DATABASE_URL")
 DEFAULT_TECH = os.getenv("DEFAULT_TECH", "Shopify")
@@ -82,21 +111,23 @@ DEFAULT_TITLES = os.getenv("DEFAULT_TITLES", "owner,ceo,founder,marketing direct
 LOGFIRE_API_KEY = os.getenv("LOGFIRE_API_KEY")
 PAGESPEED_API_KEY = os.getenv("PAGESPEED_API_KEY")
 VALIDATION_PROVIDER = os.getenv("VALIDATION_PROVIDER", "hunter")
+NO_WEBSITE_MIN_SCORE = int(os.getenv("NO_WEBSITE_MIN_SCORE", 50))
+QUEUE_PHONE_ONLY_LEADS = os.getenv("QUEUE_PHONE_ONLY_LEADS", "True").lower() == "true"
 
 # --- Target Configuration ---
 # High CPA Countries & Cities
 TARGET_LOCATIONS = [
     "New York, NY, USA", "Los Angeles, CA, USA", "Chicago, IL, USA",
-    "London, UK", "Manchester, UK",
-    "Toronto, Canada", "Vancouver, Canada",
-    "Sydney, Australia", "Melbourne, Australia",
-    "Berlin, Germany", "Munich, Germany"
+    "Houston, TX, USA", "Phoenix, AZ, USA", "Philadelphia, PA, USA",
+    "San Antonio, TX, USA", "San Diego, CA, USA", "Dallas, TX, USA",
+    "San Jose, CA, USA", "Austin, TX, USA", "Jacksonville, FL, USA",
+    "Fort Worth, TX, USA", "Columbus, OH, USA", "Charlotte, NC, USA"
 ]
 
 TARGET_NICHES = [
-    "Plumber", "Electrician", "Carpenter", "HVAC", "Roofing",
-    "Handyman", "Flooring", "Landscaper", "Painter", "Renovator",
-    "Locksmith", "Garage Door Repair"
+    "Restaurant", "Hotel", "Bar", "Cafe", "Store", "Shop", "Mall",
+    "Gym", "Dentist", "Lawyer", "Accountant", "Plumber", "Electrician",
+    "Construction", "Real Estate Agent", "Insurance Agent", "Financial Advisor"
 ]
 
 HIGH_NET_WORTH_CITIES = [
@@ -128,7 +159,7 @@ def get_search_queries():
 # --- Google Maps Settings ---
 BASE_URL = "https://www.google.com/maps"
 SCROLL_PAUSE_TIME = 2
-MAX_LEADS_PER_QUERY = 15
+MAX_LEADS_PER_QUERY = 100
 
 # --- Filtering Thresholds ---
 MIN_RATING = 0.0  # Allow leads without ratings
@@ -145,9 +176,18 @@ SELECTORS = {
 
 # --- Database ---
 DB_FILE = "leads.db"
-MAX_DAILY_ACTIONS = 40  # Daily email limit
-DELAY_MIN = 120
-DELAY_MAX = 360
+MAX_DAILY_ACTIONS = 600  # Daily email limit
+MAX_DOMAIN_SENDS_PER_DAY = int(os.getenv("MAX_DOMAIN_SENDS_PER_DAY", 10))
+MAX_CITY_SENDS_PER_DAY = int(os.getenv("MAX_CITY_SENDS_PER_DAY", 50))
+MAX_PERSONA_SENDS_PER_DAY = int(os.getenv("MAX_PERSONA_SENDS_PER_DAY", 100))
+FOLLOWUP_DELAY_DAYS = int(os.getenv("FOLLOWUP_DELAY_DAYS", 3))
+FOLLOWUP_1_DELAY_DAYS = int(os.getenv("FOLLOWUP_1_DELAY_DAYS", 5))
+FOLLOWUP_2_DELAY_DAYS = int(os.getenv("FOLLOWUP_2_DELAY_DAYS", 7))
+OPENED_FOLLOWUP_DELAY_DAYS = int(os.getenv("OPENED_FOLLOWUP_DELAY_DAYS", 2))
+BLACKLISTED_DOMAINS = [host.strip().lower() for host in os.getenv("BLACKLISTED_DOMAINS", "").split(",") if host.strip()]
+BLACKLISTED_EMAILS = [addr.strip().lower() for addr in os.getenv("BLACKLISTED_EMAILS", "").split(",") if addr.strip()]
+DELAY_MIN = 5
+DELAY_MAX = 15
 
 # --- Batch Sending (Pro Mode) ---
 BATCH_SIZE = 5          # Send 5 emails...

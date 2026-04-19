@@ -7,6 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from scraper import Scraper
 
 class FreedomSearch:
@@ -32,18 +33,33 @@ class FreedomSearch:
             if not base_url.startswith("http"):
                 base_url = "http://" + base_url
                 
-            driver.get(base_url)
-            time.sleep(3)
+            # Set short page load timeout for scraping
+            driver.set_page_load_timeout(15)
+            try:
+                driver.get(base_url)
+            except TimeoutException:
+                print(f"[FreedomSearch] Timeout loading {base_url}. Attempting to proceed with partial load.")
+                driver.execute_script("window.stop();")
+            except WebDriverException as e:
+                print(f"[FreedomSearch] Error loading {base_url}: {e}")
+                return []
+
+            time.sleep(2)
             
             # Find "About" or "Team" links
             target_links = []
             try:
                 links = driver.find_elements(By.TAG_NAME, "a")
                 for link in links:
-                    text = link.text.lower()
-                    href = link.get_attribute("href")
-                    if href and ("about" in text or "team" in text or "contact" in text or "over-ons" in text):
-                        target_links.append(href)
+                    try:
+                        text = link.text.lower()
+                        href = link.get_attribute("href")
+                        if href and ("about" in text or "team" in text or "contact" in text or "over-ons" in text):
+                            # Ensure link is same domain
+                            if urlparse(base_url).netloc in urlparse(href).netloc:
+                                target_links.append(href)
+                    except:
+                        continue
             except:
                 pass
                 
@@ -55,8 +71,11 @@ class FreedomSearch:
             for url in pages_to_scrape:
                 try:
                     if url != driver.current_url:
-                        driver.get(url)
-                        time.sleep(2)
+                        try:
+                            driver.get(url)
+                        except TimeoutException:
+                            driver.execute_script("window.stop();")
+                        time.sleep(1)
                         
                     # Scrape Emails (Simple Regex)
                     page_text = driver.find_element(By.TAG_NAME, "body").text
@@ -87,7 +106,11 @@ class FreedomSearch:
         driver = self.driver
         print(f"[FreedomSearch] Googling: {query}")
         try:
-            driver.get("https://www.google.com")
+            driver.set_page_load_timeout(20)
+            try:
+                driver.get("https://www.google.com")
+            except TimeoutException:
+                driver.execute_script("window.stop();")
             
             # Handle cookie consent (Generic common selectors)
             try:

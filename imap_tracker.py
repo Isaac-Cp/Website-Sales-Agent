@@ -4,6 +4,7 @@ import re
 import time
 import json
 import config
+from llm_helper import classify_reply_intent
 
 def _log(event, **fields):
     try:
@@ -57,11 +58,49 @@ def fetch_outcomes(since_seconds=3600, mailbox="INBOX"):
                 if is_bounce and target_email:
                     events.append({"type": "bounce", "email": target_email, "meta": {"subject": subject}})
                     continue
+
+                lower_text = f"{subject}\n{payload_text}".lower()
+                # Open receipt detection (read receipt / disposition notification)
+                if target_email and from_addr.lower() != (config.IMAP_EMAIL.lower()) and (
+                    "read receipt" in lower_text
+                    or "disposition-notification" in lower_text
+                    or "this is a read receipt" in lower_text
+                    or subject.lower().startswith("read:")
+                ):
+                    events.append({
+                        "type": "opened",
+                        "email": target_email,
+                        "meta": {
+                            "from": from_addr,
+                            "subject": subject,
+                        },
+                    })
+                    M.store(num, "+FLAGS", "\\Seen")
+                    continue
+
                 # Reply detection (not from ourselves)
                 if config.IMAP_EMAIL and from_addr.lower() != (config.IMAP_EMAIL.lower()):
-                    # Prefer Reply-To or From as the sender; we try to find our original recipient in quoted text
                     if target_email:
-                        events.append({"type": "reply", "email": target_email, "meta": {"from": from_addr, "subject": subject}})
+                        event_meta = {"from": from_addr, "subject": subject}
+                        reply_text = f"{subject}\n{payload_text}"
+                        reply_intent = classify_reply_intent(reply_text)
+                        event_meta["reply_intent"] = reply_intent
+
+                        if any(keyword in lower_text for keyword in ["unsubscribe", "stop emailing", "remove me", "do not email", "opt out"]):
+                            outcome_type = "unsubscribe"
+                        elif any(keyword in lower_text for keyword in ["clicked", "link", "visited", "went to", "checked out"]):
+                            outcome_type = "click"
+                        elif any(keyword in lower_text for keyword in ["appointment", "booked", "schedule", "meeting", "call", "availability"]):
+                            outcome_type = "appointment_requested"
+                        elif any(keyword in lower_text for keyword in ["signed", "hired", "purchase", "contract", "pay", "invoice", "paid", "deal", "booked"]):
+                            outcome_type = "deal_closed"
+                        else:
+                            outcome_type = "reply"
+
+                        if event_meta.get("reply_intent") is None:
+                            event_meta["reply_intent"] = classify_reply_intent(reply_text)
+
+                        events.append({"type": outcome_type, "email": target_email, "meta": event_meta})
                         continue
                 M.store(num, "+FLAGS", "\\Seen")
             except Exception as e:
