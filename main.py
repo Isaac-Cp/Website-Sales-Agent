@@ -43,22 +43,28 @@ except Exception:
 
 try:
     import chromadb
-    from langfuse import Langfuse
-    from fastapi import FastAPI, WebSocket
-    import uvicorn
-    import logfire
 except Exception:
     chromadb = None
+
+try:
+    from langfuse import Langfuse
+except Exception:
     Langfuse = None
+
+try:
+    from fastapi import FastAPI, WebSocket
+except Exception:
     FastAPI = None
     WebSocket = None
+
+try:
+    import uvicorn
+except Exception:
     uvicorn = None
-    logfire = None
-    chromadb = None
-    Langfuse = None
-    FastAPI = None
-    WebSocket = None
-    uvicorn = None
+
+try:
+    import logfire
+except Exception:
     logfire = None
 
 # --- FastAPI App for Koyeb Health Checks & Monitoring ---
@@ -239,7 +245,9 @@ def main():
         return
     # CrewAI / Tech Search Legacy Blocks Removed
     # Use --tech with main loop instead.
-    if args.serve and app and uvicorn:
+    if args.serve:
+        if not app or not uvicorn:
+            raise RuntimeError("Web mode requires FastAPI and uvicorn to be importable.")
         print(f"Starting API server on port {config.FASTAPI_PORT}...")
         uvicorn.run(app, host="0.0.0.0", port=config.FASTAPI_PORT)
         return
