@@ -97,6 +97,65 @@ def render_dashboard_shell():
 
       .config-item { min-width: 160px; padding: 14px 16px; border-radius: 20px; background: rgba(255, 255, 255, 0.62); border: 1px solid rgba(23, 33, 46, 0.06); }
       .config-item .label { margin-bottom: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .warning-list { display: grid; gap: 12px; }
+      .warning-item { padding: 14px 16px; border-radius: 20px; background: rgba(255, 255, 255, 0.62); border: 1px solid rgba(23, 33, 46, 0.06); }
+      .warning-item.warn { background: rgba(217, 119, 6, 0.10); border-color: rgba(217, 119, 6, 0.18); }
+      .warning-item.error { background: rgba(185, 28, 28, 0.08); border-color: rgba(185, 28, 28, 0.14); }
+      .warning-item.info { background: rgba(15, 118, 110, 0.08); border-color: rgba(15, 118, 110, 0.14); }
+      .output-log {
+        margin-top: 12px;
+        padding: 14px;
+        border-radius: 18px;
+        background: rgba(23, 33, 46, 0.92);
+        color: #dbe7f3;
+        font-family: "Consolas", "IBM Plex Mono", monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .readiness-shell { display: grid; gap: 16px; grid-template-columns: minmax(280px, 0.95fr) minmax(0, 1.05fr); }
+      .focus-card {
+        padding: 22px;
+        border-radius: 24px;
+        color: #f8fafc;
+        background: linear-gradient(135deg, rgba(15, 118, 110, 0.96), rgba(19, 78, 74, 0.96));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      }
+      .focus-card.warn { background: linear-gradient(135deg, rgba(180, 83, 9, 0.96), rgba(146, 64, 14, 0.96)); }
+      .focus-card.bad { background: linear-gradient(135deg, rgba(153, 27, 27, 0.96), rgba(127, 29, 29, 0.96)); }
+      .focus-card h3 { margin: 0 0 8px; font-size: 28px; letter-spacing: -0.04em; }
+      .focus-card p { margin: 0; color: rgba(248, 250, 252, 0.82); line-height: 1.65; }
+      .check-list, .action-list, .funnel-steps { display: grid; gap: 12px; }
+      .check-item, .action-item {
+        padding: 14px 16px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.62);
+        border: 1px solid rgba(23, 33, 46, 0.06);
+      }
+      .check-item { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 12px; align-items: start; }
+      .check-dot { width: 12px; height: 12px; border-radius: 999px; margin-top: 4px; background: rgba(100, 116, 139, 0.45); }
+      .check-item.good .check-dot { background: var(--teal); }
+      .check-item.warn .check-dot { background: var(--gold); }
+      .check-item.bad .check-dot { background: var(--danger); }
+      .action-item.info { background: rgba(15, 118, 110, 0.08); border-color: rgba(15, 118, 110, 0.14); }
+      .action-item.warn { background: rgba(217, 119, 6, 0.10); border-color: rgba(217, 119, 6, 0.18); }
+      .action-item.error { background: rgba(185, 28, 28, 0.08); border-color: rgba(185, 28, 28, 0.14); }
+      .funnel-steps { margin-top: 16px; }
+      .funnel-step { display: grid; grid-template-columns: minmax(84px, 108px) minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+      .funnel-bar { height: 12px; border-radius: 999px; background: rgba(23, 33, 46, 0.08); overflow: hidden; }
+      .funnel-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--teal), #2dd4bf); }
+      .command-line {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        background: rgba(23, 33, 46, 0.08);
+        color: var(--ink);
+        font-family: "Consolas", "IBM Plex Mono", monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        word-break: break-word;
+      }
       .empty, .loading, .error { padding: 18px; border-radius: 20px; }
       .empty, .loading { background: rgba(255, 255, 255, 0.55); color: var(--muted); }
       .error { background: rgba(185, 28, 28, 0.08); color: var(--danger); }
@@ -104,6 +163,7 @@ def render_dashboard_shell():
       @media (max-width: 1180px) {
         .grid { grid-template-columns: 1fr; }
         .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .readiness-shell { grid-template-columns: 1fr; }
       }
 
       @media (max-width: 760px) {
@@ -125,6 +185,7 @@ def render_dashboard_shell():
           </div>
           <div class="hero-actions">
             <button class="button primary" id="refreshButton" type="button">Refresh Data</button>
+            <button class="button secondary" id="runBotButton" type="button">Run Bot Now</button>
             <a class="button secondary" href="/health">Health JSON</a>
             <a class="button secondary" href="/status">Status JSON</a>
           </div>
@@ -147,12 +208,23 @@ def render_dashboard_shell():
           <section class="panel">
             <div class="panel-head">
               <div>
+                <p class="kicker">Command Center</p>
+                <h2>What The Bot Needs Next</h2>
+              </div>
+            </div>
+            <div id="actionCenter"><div class="loading">Loading readiness and next actions...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
                 <p class="kicker">Delivery Funnel</p>
                 <h2>Outreach Health</h2>
               </div>
               <div class="tag-row" id="healthRates"></div>
             </div>
             <div class="triple" id="healthGrid"><div class="loading">Loading outreach health...</div></div>
+            <div id="healthFunnel"><div class="loading">Loading outreach funnel...</div></div>
           </section>
 
           <section class="panel">
@@ -228,6 +300,26 @@ def render_dashboard_shell():
         </section>
 
         <aside class="stack">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Automation</p>
+                <h2>Bot Runtime</h2>
+              </div>
+            </div>
+            <div id="automationPanel"><div class="loading">Loading bot runtime...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Alerts</p>
+                <h2>What Needs Attention</h2>
+              </div>
+            </div>
+            <div id="warningsPanel"><div class="loading">Loading dashboard warnings...</div></div>
+          </section>
+
           <section class="panel">
             <div class="panel-head">
               <div>
@@ -374,10 +466,17 @@ def render_dashboard_shell():
 
       function pillClass(status) {
         const text = String(status || '').toLowerCase();
-        if (['healthy', 'opened', 'interested', 'sale_closed', 'appointment_booked'].includes(text)) return 'good';
-        if (['followup_sent', 'manual_queue', 'appointment_requested', 'needs_follow_up'].includes(text)) return 'warn';
-        if (['bounced', 'unsubscribed', 'blacklisted', 'failed', 'not_interested'].includes(text)) return 'bad';
+        if (['healthy', 'opened', 'interested', 'sale_closed', 'appointment_booked', 'running', 'sleeping', 'ready'].includes(text)) return 'good';
+        if (['followup_sent', 'manual_queue', 'appointment_requested', 'needs_follow_up', 'queued', 'starting', 'attention'].includes(text)) return 'warn';
+        if (['bounced', 'unsubscribed', 'blacklisted', 'failed', 'not_interested', 'error', 'blocked'].includes(text)) return 'bad';
         return 'soft';
+      }
+
+      function toneClass(status) {
+        const text = String(status || '').toLowerCase();
+        if (['healthy', 'good', 'ready', 'running', 'sleeping'].includes(text)) return 'good';
+        if (['error', 'bad', 'blocked'].includes(text)) return 'bad';
+        return 'warn';
       }
 
       function metric(label, value, note, tone) {
@@ -415,9 +514,11 @@ def render_dashboard_shell():
       }
 
       function renderHero(payload) {
+        const automation = payload.automation || {};
         document.getElementById('heroMeta').innerHTML = [
           `Mode: ${escapeHtml(payload.runtime.mode || 'web-dashboard')}`,
           `Uptime: ${escapeHtml(formatUptime(payload.runtime.uptime_seconds))}`,
+          `Bot: ${escapeHtml(automation.status || 'unknown')}`,
           `DB: ${escapeHtml(payload.runtime.database?.backend || '--')} / ${escapeHtml(payload.runtime.database?.target || '--')}`,
           `Generated: ${escapeHtml(formatDate(payload.generated_at))}`,
         ].map((text) => `<span class="badge">${text}</span>`).join('');
@@ -445,8 +546,62 @@ def render_dashboard_shell():
         ].join('');
       }
 
+      function renderActionCenter(payload) {
+        const readiness = payload.readiness || {};
+        const automation = payload.automation || {};
+        const blockers = readiness.blockers || [];
+        const checks = readiness.checks || [];
+        const actionItems = payload.action_items || [];
+        const statusTone = toneClass(readiness.status);
+        const statusLabel = readiness.status === 'ready' ? 'Live Outreach Ready' : readiness.status === 'blocked' ? 'Sending Is Blocked' : 'Bot Needs Attention';
+
+        document.getElementById('actionCenter').innerHTML = `
+          <div class="readiness-shell">
+            <article class="focus-card ${statusTone}">
+              <p class="kicker" style="color:rgba(248,250,252,0.72);">Send readiness</p>
+              <h3>${escapeHtml(statusLabel)}</h3>
+              <p>${escapeHtml(readiness.summary || 'No readiness summary is available yet.')}</p>
+              <div class="tag-row" style="margin-top:16px;">
+                <span class="badge">Runner ${escapeHtml(automation.status || 'unknown')}</span>
+                <span class="badge">Next ${escapeHtml(formatRelative(automation.next_run_at))}</span>
+                <span class="badge">Last ${escapeHtml(formatRelative(automation.last_run_finished_at || automation.last_run_started_at))}</span>
+              </div>
+              ${blockers.length ? `<div style="margin-top:16px;color:rgba(248,250,252,0.82);font-size:14px;line-height:1.6;">${escapeHtml(blockers.slice(0, 3).join(' | '))}</div>` : ''}
+            </article>
+            <div class="stack" style="gap:12px;">
+              <div class="check-list">
+                ${checks.length ? checks.map((check) => `
+                  <article class="check-item ${escapeHtml(check.status || 'warn')}">
+                    <div class="check-dot"></div>
+                    <div>
+                      <div style="font-weight:700;margin-bottom:4px;">${escapeHtml(check.label || 'Check')}</div>
+                      <div class="muted">${escapeHtml(check.detail || '')}</div>
+                    </div>
+                  </article>
+                `).join('') : '<div class="empty">No readiness checks yet.</div>'}
+              </div>
+              <div class="action-list">
+                ${actionItems.length ? actionItems.map((item) => `
+                  <article class="action-item ${escapeHtml(item.level || 'info')}">
+                    <div style="font-weight:700;margin-bottom:6px;">${escapeHtml(item.title || 'Action')}</div>
+                    <div class="muted">${escapeHtml(item.message || '')}</div>
+                  </article>
+                `).join('') : '<div class="empty">No action items right now.</div>'}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
       function renderHealth(payload) {
         const health = payload.health;
+        const steps = [
+          { label: 'Sent', value: health.sent_total, note: 'Base volume' },
+          { label: 'Opened', value: health.opened_total, note: formatPercent(health.open_rate) },
+          { label: 'Replies', value: health.reply_total, note: formatPercent(health.reply_rate) },
+          { label: 'Conversions', value: health.conversion_total, note: formatPercent(health.conversion_rate) },
+        ];
+        const maxValue = Math.max(...steps.map((step) => Number(step.value ?? 0)), 1);
         document.getElementById('healthGrid').innerHTML = [
           metric('Sent', formatCompact(health.sent_total), 'Total sent events on record.', 'teal'),
           metric('Opened', formatCompact(health.opened_total), 'Recorded open or receipt signals.'),
@@ -460,6 +615,24 @@ def render_dashboard_shell():
           `Reply rate ${formatPercent(health.reply_rate)}`,
           `Conversion rate ${formatPercent(health.conversion_rate)}`,
         ].map((text) => `<span class="tag" style="background:rgba(15,118,110,0.10);color:#134e4a;">${escapeHtml(text)}</span>`).join('');
+        document.getElementById('healthFunnel').innerHTML = `
+          <div class="funnel-steps">
+            ${steps.map((step) => {
+              const value = Number(step.value ?? 0);
+              const width = Math.max(value ? 12 : 6, Math.round((value / maxValue) * 100));
+              return `
+                <div class="funnel-step">
+                  <div>
+                    <strong>${escapeHtml(step.label)}</strong>
+                    <div class="muted">${escapeHtml(step.note)}</div>
+                  </div>
+                  <div class="funnel-bar"><div class="funnel-fill" style="width:${width}%"></div></div>
+                  <div><strong>${escapeHtml(formatNumber(value))}</strong></div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
       }
 
       function renderPipeline(payload) {
@@ -475,6 +648,44 @@ def render_dashboard_shell():
       function renderAttributions(payload) {
         document.getElementById('personaAttribution').innerHTML = attributionList(payload.attribution.personas);
         document.getElementById('hookAttribution').innerHTML = attributionList(payload.attribution.hooks);
+      }
+
+      function renderAutomation(payload) {
+        const automation = payload.automation || {};
+        const output = (automation.output_tail || []).slice(-8).join('\n');
+        document.getElementById('automationPanel').innerHTML = `
+          <div class="tag-row" style="margin-bottom:12px;">
+            <span class="pill ${pillClass(automation.status)}">${escapeHtml(automation.status || 'unknown')}</span>
+            <span class="tag" style="background:rgba(23,33,46,0.08);color:#17212e;">Autostart ${automation.enabled ? 'on' : 'off'}</span>
+          </div>
+          <div class="config-grid" style="margin-bottom:12px;">
+            <div class="config-item"><div class="label">Message</div><strong>${escapeHtml(automation.message || 'No status message')}</strong></div>
+            <div class="config-item"><div class="label">Last run</div><strong>${escapeHtml(formatDate(automation.last_run_finished_at || automation.last_run_started_at))}</strong></div>
+            <div class="config-item"><div class="label">Emails last run</div><strong>${escapeHtml(formatNumber(automation.last_run_emails_sent || 0))}</strong></div>
+            <div class="config-item"><div class="label">Next run</div><strong>${escapeHtml(formatDate(automation.next_run_at))}</strong></div>
+            <div class="config-item"><div class="label">Run duration</div><strong>${escapeHtml(formatUptime(automation.last_duration_seconds || 0))}</strong></div>
+            <div class="config-item"><div class="label">Failures</div><strong>${escapeHtml(formatNumber(automation.consecutive_failures || 0))}</strong></div>
+            <div class="config-item"><div class="label">Run cadence</div><strong>${escapeHtml(formatUptime(automation.loop_interval_seconds || 0))}</strong></div>
+            <div class="config-item"><div class="label">Timeout</div><strong>${escapeHtml(formatUptime(automation.run_timeout_seconds || 0))}</strong></div>
+          </div>
+          ${automation.last_error ? `<div class="warning-item error"><strong>Last error</strong><div class="muted">${escapeHtml(automation.last_error)}</div></div>` : ''}
+          ${(automation.command || []).length ? `<div class="command-line">${escapeHtml((automation.command || []).join(' '))}</div>` : ''}
+          ${output ? `<div class="output-log">${escapeHtml(output)}</div>` : '<div class="empty">No bot output captured yet.</div>'}
+        `;
+      }
+
+      function renderWarnings(payload) {
+        const warnings = payload.warnings || [];
+        if (!warnings.length) {
+          document.getElementById('warningsPanel').innerHTML = '<div class="empty">No urgent warnings right now.</div>';
+          return;
+        }
+        document.getElementById('warningsPanel').innerHTML = `<div class="warning-list">${warnings.map((warning) => `
+          <article class="warning-item ${escapeHtml(warning.level || 'warn')}">
+            <div style="font-weight:700;margin-bottom:6px;">${escapeHtml(warning.title || 'Notice')}</div>
+            <div class="muted">${escapeHtml(warning.message || '')}</div>
+          </article>
+        `).join('')}</div>`;
       }
 
       function renderExamples(payload) {
@@ -501,6 +712,7 @@ def render_dashboard_shell():
         document.getElementById('runtimeConfig').innerHTML = [
           ['Database', `${runtime.database?.backend || '--'} / ${runtime.database?.target || '--'}`],
           ['Database size', formatBytes(runtime.database_size_bytes)],
+          ['Bot autostart', runtime.bot_autostart_enabled ? 'Enabled' : 'Disabled'],
           ['Validation', runtime.validation_provider || '--'],
           ['Default tech', runtime.default_tech || '--'],
           ['Parallel workers', formatNumber(runtime.parallel_workers)],
@@ -623,6 +835,12 @@ def render_dashboard_shell():
         return response.json();
       }
 
+      async function postJson(url) {
+        const response = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+        return response.json();
+      }
+
       async function loadLeadDetail(leadId, scrollToPanel = false) {
         if (!leadId) return;
         state.selectedLeadId = Number(leadId);
@@ -647,10 +865,13 @@ def render_dashboard_shell():
           state.payload = payload;
           renderHero(payload);
           renderOverview(payload);
+          renderActionCenter(payload);
           renderHealth(payload);
           renderPipeline(payload);
           renderDistributions(payload);
           renderAttributions(payload);
+          renderAutomation(payload);
+          renderWarnings(payload);
           renderExamples(payload);
           renderRuntime(payload);
           renderEvents(payload);
@@ -678,6 +899,20 @@ def render_dashboard_shell():
       });
 
       document.getElementById('refreshButton').addEventListener('click', loadDashboard);
+      document.getElementById('runBotButton').addEventListener('click', async () => {
+        const button = document.getElementById('runBotButton');
+        button.disabled = true;
+        button.textContent = 'Queueing...';
+        try {
+          await postJson('/api/bot/run-now');
+          await loadDashboard();
+        } catch (error) {
+          document.getElementById('warningsPanel').innerHTML = `<div class="error">Failed to queue bot run: ${escapeHtml(error.message)}</div>`;
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Run Bot Now';
+        }
+      });
       loadDashboard();
       window.setInterval(loadDashboard, REFRESH_INTERVAL_MS);
     </script>

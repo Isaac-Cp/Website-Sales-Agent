@@ -182,6 +182,8 @@ def _integration_summary():
 
 def _runtime_summary(boot_timestamp):
     database_summary = _database_target_summary()
+    bot_autostart = os.getenv("BOT_AUTOSTART")
+    bot_autostart_enabled = str(bot_autostart).strip().lower() in {"1", "true", "yes", "on"} if bot_autostart is not None else bool(os.getenv("PORT"))
     return {
         "service": "website-sales-agent",
         "mode": "web-dashboard",
@@ -201,8 +203,9 @@ def _runtime_summary(boot_timestamp):
         "queue_phone_only_leads": bool(getattr(config, "QUEUE_PHONE_ONLY_LEADS", False)),
         "validation_provider": getattr(config, "VALIDATION_PROVIDER", None),
         "email_window": _email_window_state(),
+        "bot_autostart_enabled": bot_autostart_enabled,
         "integrations": _integration_summary(),
-        "execution_note": "This web service monitors stored bot activity. Scraping and sending still require the bot loop to run in a worker or manual session.",
+        "execution_note": "This web service can host the dashboard and run background bot sessions. Use the automation panel to confirm whether the runner is active, sleeping, disabled, or blocked by configuration.",
         "log_file": getattr(config, "LOG_FILE", None),
     }
 

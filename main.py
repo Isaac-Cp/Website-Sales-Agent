@@ -2,6 +2,7 @@ import time
 import random
 import json
 import argparse
+import os
 from urllib.parse import urlparse
 import config
 from scraper import Scraper
@@ -22,6 +23,7 @@ from yelp_scraper import extract_business_website
 from scrapers_manager import run_parallel_scraping
 from utils import canonicalize_website, pagespeed
 from core.pipeline import run_pipeline
+from bot_manager import BotManager
 from dashboard_data import build_dashboard_payload, get_dashboard_lead_detail
 from web_ui import render_dashboard_shell
 try:
@@ -73,6 +75,291 @@ except Exception:
     logfire = None
 
 APP_BOOT_TS = time.time()
+BOT_MANAGER = BotManager(__file__)
+
+
+def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_limit=8):
+    dm = DataManager()
+    payload = build_dashboard_payload(
+        dm,
+        APP_BOOT_TS,
+        recent_limit=recent_limit,
+        event_limit=event_limit,
+        due_limit=due_limit,
+        top_limit=top_limit,
+    )
+    automation = BOT_MANAGER.snapshot()
+    warnings = []
+    config_issues = config.validate_config()
+    runtime = payload.get("runtime", {})
+    overview = payload.get("overview", {})
+    health = payload.get("health", {})
+    integrations = runtime.get("integrations") or {}
+    email_window = runtime.get("email_window") or {}
+
+    total_leads = _safe_int(overview.get("total_leads"), 0)
+    with_email = _safe_int(overview.get("with_email"), 0)
+    daily_actions = _safe_int(overview.get("daily_actions"), 0)
+    daily_remaining = max(0, _safe_int(overview.get("daily_remaining"), 0))
+    due_followups = _safe_int(overview.get("due_followups"), 0)
+    risk_total = _safe_int(health.get("risk_total"), 0)
+    sent_total = _safe_int(health.get("sent_total"), 0)
+    max_daily_actions = _safe_int(runtime.get("max_daily_actions"), 0)
+    smtp_ready = bool(integrations.get("smtp_ready"))
+    llm_ready = bool(integrations.get("groq") or integrations.get("openai"))
+    email_window_open = email_window.get("is_open")
+    bot_enabled = bool(automation.get("enabled"))
+    bot_status = automation.get("status")
+
+    hard_blockers = []
+    soft_blockers = []
+    action_items = []
+
+    if bot_status == "error":
+        hard_blockers.append("The background runner failed on its last attempt.")
+        action_items.append(
+            {
+                "level": "error",
+                "title": "Inspect the latest bot failure",
+                "message": automation.get("last_error") or "Open the bot runtime panel and review the last captured output before the next run.",
+            }
+        )
+
+    if not smtp_ready:
+        hard_blockers.append("SMTP is not configured, so the bot cannot send live emails.")
+        action_items.append(
+            {
+                "level": "error",
+                "title": "Connect a sending mailbox",
+                "message": "Set SMTP_EMAIL and SMTP_PASSWORD, or provide SMTP_ACCOUNTS / SMTP_ACCOUNTS_JSON so live sending can start.",
+            }
+        )
+
+    if max_daily_actions and daily_remaining <= 0:
+        hard_blockers.append("The daily action budget is exhausted.")
+        action_items.append(
+            {
+                "level": "warn",
+                "title": "Daily sending limit reached",
+                "message": f"The bot has already recorded {daily_actions} of {max_daily_actions} allowed daily actions. Sending resumes after the daily counters reset.",
+            }
+        )
+
+    if email_window_open is False:
+        soft_blockers.append("The configured email send window is currently closed.")
+        action_items.append(
+            {
+                "level": "info",
+                "title": "Wait for the next send window",
+                "message": f"Live sending is paused outside {email_window.get('start') or '--'} - {email_window.get('end') or '--'}. The runner can still queue work and will send when the window reopens.",
+            }
+        )
+
+    if not bot_enabled:
+        soft_blockers.append("Bot autostart is disabled, so the dashboard will not launch runs automatically.")
+        action_items.append(
+            {
+                "level": "warn",
+                "title": "Enable automatic bot runs",
+                "message": "Set BOT_AUTOSTART=true to let Render keep the outreach loop running, or keep using Run Bot Now from the dashboard.",
+            }
+        )
+
+    if total_leads == 0:
+        soft_blockers.append("No leads have been collected yet.")
+        action_items.append(
+            {
+                "level": "warn",
+                "title": "Collect the first leads",
+                "message": "Use Run Bot Now after setting BOT_QUERY or your niche/location inputs so the bot has businesses to work on.",
+            }
+        )
+    elif with_email == 0:
+        soft_blockers.append("Leads exist, but none currently have direct email contacts.")
+        action_items.append(
+            {
+                "level": "warn",
+                "title": "Increase contact coverage",
+                "message": "The bot has leads saved, but zero verified email contacts. Sending cannot start until email discovery succeeds for at least some leads.",
+            }
+        )
+
+    if due_followups > 0:
+        action_items.append(
+            {
+                "level": "info",
+                "title": "Follow-ups are waiting",
+                "message": f"{due_followups} lead(s) are due for the next touch. Those are the fastest opportunities to reactivate before scraping more cold leads.",
+            }
+        )
+
+    if risk_total > 0:
+        action_items.append(
+            {
+                "level": "warn",
+                "title": "Review delivery risk",
+                "message": f"There are {risk_total} bounce or unsubscribe signal(s) in the history. Review the affected leads and refine targeting before scaling volume.",
+            }
+        )
+
+    if not llm_ready:
+        action_items.append(
+            {
+                "level": "info",
+                "title": "Add an LLM key for stronger copy",
+                "message": "The bot can still send with generic templates, but adding GROQ_API_KEY or OPENAI_API_KEY will improve email quality and personalization.",
+            }
+        )
+
+    if hard_blockers:
+        readiness_status = "blocked"
+        readiness_summary = "The dashboard is live, but live outreach is currently blocked by one or more operational issues."
+    elif soft_blockers or sent_total == 0:
+        readiness_status = "attention"
+        readiness_summary = "The bot can run, but there are still a few conditions worth fixing before outreach will feel reliable."
+    else:
+        readiness_status = "ready"
+        readiness_summary = "The bot is active, the system is configured for live sending, and recent activity suggests the loop is healthy."
+
+    readiness_checks = [
+        {
+            "label": "Background runner",
+            "status": "good" if bot_enabled else "warn",
+            "detail": automation.get("message") or ("Automatic runs are enabled." if bot_enabled else "Automatic runs are disabled."),
+        },
+        {
+            "label": "SMTP sending",
+            "status": "good" if smtp_ready else "bad",
+            "detail": f"{_safe_int(integrations.get('smtp_accounts'), 0)} sending account(s) detected." if smtp_ready else "No SMTP account is configured for live delivery.",
+        },
+        {
+            "label": "Email window",
+            "status": "good" if email_window_open is True else "warn",
+            "detail": "The configured send window is open right now." if email_window_open is True else f"Current window: {email_window.get('start') or '--'} - {email_window.get('end') or '--'}.",
+        },
+        {
+            "label": "Daily send budget",
+            "status": "good" if daily_remaining > 0 or not max_daily_actions else "bad",
+            "detail": f"{daily_remaining} action(s) remain out of {max_daily_actions or 'unlimited'} for today.",
+        },
+        {
+            "label": "Lead contact coverage",
+            "status": "good" if with_email > 0 else ("warn" if total_leads > 0 else "bad"),
+            "detail": f"{with_email} of {total_leads} stored lead(s) currently have an email contact.",
+        },
+        {
+            "label": "Content generation",
+            "status": "good" if llm_ready else "warn",
+            "detail": "An LLM key is configured for personalized copy." if llm_ready else "No LLM key detected, so the bot will fall back to generic templates.",
+        },
+    ]
+
+    if sent_total == 0:
+        if bot_status in {"disabled", "queued"}:
+            warnings.append(
+                {
+                    "level": "warn",
+                    "title": "Bot has not started running yet",
+                    "message": automation.get("message") or "The dashboard is live, but the outreach runner is not active.",
+                }
+            )
+        elif bot_status == "running":
+            warnings.append(
+                {
+                    "level": "info",
+                    "title": "First outreach run is in progress",
+                    "message": "The bot is currently running, so the dashboard may still show zero sent emails until the session finishes.",
+                }
+            )
+        elif bot_status == "error":
+            warnings.append(
+                {
+                    "level": "error",
+                    "title": "Bot runner hit an error",
+                    "message": automation.get("last_error") or automation.get("message") or "The background bot session failed before it could send email.",
+                }
+            )
+        elif bot_status == "sleeping" and automation.get("last_run_finished_at"):
+            warnings.append(
+                {
+                    "level": "info",
+                    "title": "Bot ran but has not sent email yet",
+                    "message": "The runner completed a session, but zero emails have been recorded so far. Common reasons are no validated leads, missing SMTP credentials, send-window limits, or all candidates being throttled or filtered out.",
+                }
+            )
+
+    if config.DRY_RUN:
+        warnings.append(
+            {
+                "level": "warn",
+                "title": "Dry run mode is enabled",
+                "message": "The bot will generate previews but will not send live emails while DRY_RUN is true.",
+            }
+        )
+
+    if not smtp_ready:
+        warnings.append(
+            {
+                "level": "error",
+                "title": "SMTP is not configured",
+                "message": "Without SMTP credentials, the bot will not deliver live emails. Configure SMTP_EMAIL / SMTP_PASSWORD or SMTP_ACCOUNTS before expecting sends.",
+            }
+        )
+
+    if email_window_open is False:
+        warnings.append(
+            {
+                "level": "warn",
+                "title": "Sending window is closed",
+                "message": f"Email delivery is paused outside {email_window.get('start') or '--'} - {email_window.get('end') or '--'}.",
+            }
+        )
+
+    if max_daily_actions and daily_remaining <= 0:
+        warnings.append(
+            {
+                "level": "warn",
+                "title": "Daily action limit reached",
+                "message": f"The bot has used {daily_actions} of {max_daily_actions} allowed actions for today.",
+            }
+        )
+
+    if total_leads == 0:
+        warnings.append(
+            {
+                "level": "warn",
+                "title": "No leads are stored yet",
+                "message": "The bot needs at least one query, niche, or location configuration before it can discover leads and start outreach.",
+            }
+        )
+    elif with_email == 0:
+        warnings.append(
+            {
+                "level": "warn",
+                "title": "No leads have email contacts yet",
+                "message": "Leads are being stored, but none currently have a direct email. Outreach will stay at zero until email discovery succeeds.",
+            }
+        )
+
+    for issue in config_issues:
+        warnings.append(
+            {
+                "level": "error",
+                "title": "Configuration issue",
+                "message": issue,
+            }
+        )
+
+    payload["automation"] = automation
+    payload["readiness"] = {
+        "status": readiness_status,
+        "summary": readiness_summary,
+        "blockers": hard_blockers + soft_blockers,
+        "checks": readiness_checks,
+    }
+    payload["action_items"] = action_items[:6]
+    payload["warnings"] = warnings
+    return payload
 
 # --- FastAPI App for Koyeb Health Checks & Monitoring ---
 app = None
@@ -93,9 +380,18 @@ if FastAPI:
             snapshot["daily_actions"] = dashboard["overview"]["daily_actions"]
             snapshot["due_followups"] = dashboard["overview"]["due_followups"]
             snapshot["total_leads"] = dashboard["overview"]["total_leads"]
+            snapshot["bot_status"] = BOT_MANAGER.snapshot().get("status")
         except Exception as e:
             snapshot["error"] = str(e)
         return snapshot
+
+    @app.on_event("startup")
+    async def app_startup():
+        BOT_MANAGER.start()
+
+    @app.on_event("shutdown")
+    async def app_shutdown():
+        BOT_MANAGER.stop()
 
     @app.get("/", response_class=HTMLResponse)
     def homepage():
@@ -114,8 +410,7 @@ if FastAPI:
 
     @app.get("/api/dashboard")
     def dashboard_data():
-        dm = DataManager()
-        return build_dashboard_payload(dm, APP_BOOT_TS)
+        return build_dashboard_response()
 
     @app.get("/api/dashboard/leads/{lead_id}")
     def dashboard_lead_detail(lead_id: int):
@@ -124,6 +419,14 @@ if FastAPI:
         if not detail:
             raise HTTPException(status_code=404, detail="Lead not found")
         return detail
+
+    @app.get("/api/bot/status")
+    def bot_status():
+        return BOT_MANAGER.snapshot()
+
+    @app.post("/api/bot/run-now")
+    def bot_run_now():
+        return BOT_MANAGER.request_run_now()
 
     @app.websocket("/ws/logs")
     async def logs(ws: WebSocket):
