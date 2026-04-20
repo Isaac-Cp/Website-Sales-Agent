@@ -22,7 +22,8 @@ from yelp_scraper import extract_business_website
 from scrapers_manager import run_parallel_scraping
 from utils import canonicalize_website, pagespeed
 from core.pipeline import run_pipeline
-from web_ui import render_homepage
+from dashboard_data import build_dashboard_payload, get_dashboard_lead_detail
+from web_ui import render_dashboard_shell
 try:
     from langchain_groq import ChatGroq
 except ImportError:
@@ -53,10 +54,11 @@ except Exception:
     Langfuse = None
 
 try:
-    from fastapi import FastAPI, WebSocket
+    from fastapi import FastAPI, HTTPException, WebSocket
     from fastapi.responses import HTMLResponse
 except Exception:
     FastAPI = None
+    HTTPException = None
     WebSocket = None
     HTMLResponse = None
 
@@ -70,26 +72,35 @@ try:
 except Exception:
     logfire = None
 
+APP_BOOT_TS = time.time()
+
 # --- FastAPI App for Koyeb Health Checks & Monitoring ---
 app = None
 if FastAPI:
     app = FastAPI(title="Website Sales Agent API")
 
     def service_snapshot():
-        snapshot = {"status": "healthy", "service": "website-sales-agent", "running": True}
+        snapshot = {
+            "status": "healthy",
+            "service": "website-sales-agent",
+            "running": True,
+            "mode": "web-dashboard",
+            "booted_at": APP_BOOT_TS,
+        }
         try:
-            from database import DataManager
-
             dm = DataManager()
-            snapshot["daily_actions"] = dm.count_daily_actions()
+            dashboard = build_dashboard_payload(dm, APP_BOOT_TS, recent_limit=4, event_limit=4, due_limit=4, top_limit=4)
+            snapshot["daily_actions"] = dashboard["overview"]["daily_actions"]
+            snapshot["due_followups"] = dashboard["overview"]["due_followups"]
+            snapshot["total_leads"] = dashboard["overview"]["total_leads"]
         except Exception as e:
             snapshot["error"] = str(e)
         return snapshot
 
     @app.get("/", response_class=HTMLResponse)
     def homepage():
-        """Human-friendly landing page for the web deployment."""
-        return HTMLResponse(render_homepage(service_snapshot()))
+        """Dashboard home for the web deployment."""
+        return HTMLResponse(render_dashboard_shell())
 
     @app.get("/health")
     def health_check():
@@ -100,6 +111,19 @@ if FastAPI:
     def site_status():
         """Returns the current status and activity count."""
         return service_snapshot()
+
+    @app.get("/api/dashboard")
+    def dashboard_data():
+        dm = DataManager()
+        return build_dashboard_payload(dm, APP_BOOT_TS)
+
+    @app.get("/api/dashboard/leads/{lead_id}")
+    def dashboard_lead_detail(lead_id: int):
+        dm = DataManager()
+        detail = get_dashboard_lead_detail(dm, lead_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        return detail
 
     @app.websocket("/ws/logs")
     async def logs(ws: WebSocket):
