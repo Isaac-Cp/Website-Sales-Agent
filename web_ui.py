@@ -156,6 +156,107 @@ def render_dashboard_shell():
         line-height: 1.5;
         word-break: break-word;
       }
+      .hero-actions { align-items: center; }
+      .control-row, .filter-row { display: flex; flex-wrap: wrap; gap: 10px; }
+      .control-row { margin-top: 14px; }
+      .field {
+        min-width: 120px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(23, 33, 46, 0.10);
+        background: rgba(255, 255, 255, 0.78);
+        color: var(--ink);
+        font: inherit;
+      }
+      .field.compact { min-width: 96px; }
+      .button.ghost { background: rgba(23, 33, 46, 0.08); color: var(--ink); }
+      .pulse-grid, .analytics-grid, .quad { display: grid; gap: 16px; }
+      .pulse-grid { grid-template-columns: minmax(260px, 1.1fr) minmax(0, 0.9fr); }
+      .analytics-grid { grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr); }
+      .quad { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .pulse-card {
+        padding: 22px;
+        border-radius: 24px;
+        color: #f8fafc;
+        background: linear-gradient(135deg, rgba(15, 118, 110, 0.96), rgba(19, 78, 74, 0.96));
+      }
+      .pulse-card.warming { background: linear-gradient(135deg, rgba(180, 83, 9, 0.96), rgba(146, 64, 14, 0.96)); }
+      .pulse-card.blocked, .pulse-card.idle { background: linear-gradient(135deg, rgba(153, 27, 27, 0.96), rgba(127, 29, 29, 0.96)); }
+      .pulse-card h3 { margin: 10px 0 8px; font-size: clamp(28px, 4vw, 42px); letter-spacing: -0.05em; }
+      .pulse-card p { margin: 0; color: rgba(248, 250, 252, 0.84); line-height: 1.6; }
+      .pulse-dot {
+        display: inline-flex;
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: #7dd3fc;
+        box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.75);
+        animation: pulseDot 1.8s infinite;
+      }
+      .pulse-card.blocked .pulse-dot, .pulse-card.idle .pulse-dot { background: #fca5a5; box-shadow: 0 0 0 0 rgba(252, 165, 165, 0.7); }
+      .pulse-card.warming .pulse-dot { background: #fde68a; box-shadow: 0 0 0 0 rgba(253, 230, 138, 0.75); }
+      @keyframes pulseDot {
+        0% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.65); }
+        70% { box-shadow: 0 0 0 12px rgba(125, 211, 252, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0); }
+      }
+      .timeline-grid, .signal-grid { display: grid; gap: 12px; }
+      .signal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .signal-card {
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.62);
+        border: 1px solid rgba(23, 33, 46, 0.06);
+      }
+      .notification-list, .run-list { display: grid; gap: 12px; }
+      .notification-item, .run-item {
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.62);
+        border: 1px solid rgba(23, 33, 46, 0.06);
+      }
+      .notification-item.good { background: rgba(15, 118, 110, 0.08); border-color: rgba(15, 118, 110, 0.14); }
+      .notification-item.info { background: rgba(59, 130, 246, 0.08); border-color: rgba(59, 130, 246, 0.14); }
+      .notification-item.warn { background: rgba(217, 119, 6, 0.10); border-color: rgba(217, 119, 6, 0.18); }
+      .notification-item.error { background: rgba(185, 28, 28, 0.08); border-color: rgba(185, 28, 28, 0.14); }
+      .trend-shell, .history-shell { display: grid; gap: 14px; }
+      .trend-bars {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+        gap: 10px;
+        align-items: end;
+        min-height: 210px;
+      }
+      .trend-day { display: grid; gap: 8px; justify-items: stretch; }
+      .trend-stack {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 4px;
+        align-items: end;
+        min-height: 170px;
+      }
+      .trend-col {
+        border-radius: 999px 999px 12px 12px;
+        min-height: 6px;
+        background: rgba(23, 33, 46, 0.15);
+      }
+      .trend-col.leads { background: linear-gradient(180deg, rgba(15,118,110,0.95), rgba(20,184,166,0.65)); }
+      .trend-col.sent { background: linear-gradient(180deg, rgba(59,130,246,0.95), rgba(96,165,250,0.65)); }
+      .trend-col.replies { background: linear-gradient(180deg, rgba(217,119,6,0.95), rgba(251,191,36,0.65)); }
+      .trend-col.conversions { background: linear-gradient(180deg, rgba(22,163,74,0.95), rgba(74,222,128,0.65)); }
+      .trend-meta { text-align: center; }
+      .legend { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+      .legend-item { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; }
+      .legend-swatch { width: 10px; height: 10px; border-radius: 999px; }
+      .funnel-strip { display: grid; gap: 10px; margin-top: 12px; }
+      .funnel-row {
+        display: grid;
+        grid-template-columns: minmax(100px, 140px) minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+      }
+      .mini-bar { height: 10px; border-radius: 999px; background: rgba(23, 33, 46, 0.08); overflow: hidden; }
+      .mini-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--teal), #2dd4bf); }
       .empty, .loading, .error { padding: 18px; border-radius: 20px; }
       .empty, .loading { background: rgba(255, 255, 255, 0.55); color: var(--muted); }
       .error { background: rgba(185, 28, 28, 0.08); color: var(--danger); }
@@ -164,6 +265,7 @@ def render_dashboard_shell():
         .grid { grid-template-columns: 1fr; }
         .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .readiness-shell { grid-template-columns: 1fr; }
+        .pulse-grid, .analytics-grid, .quad { grid-template-columns: 1fr; }
       }
 
       @media (max-width: 760px) {
@@ -218,6 +320,16 @@ def render_dashboard_shell():
           <section class="panel">
             <div class="panel-head">
               <div>
+                <p class="kicker">Heartbeat</p>
+                <h2>Outreach Proof Of Work</h2>
+              </div>
+            </div>
+            <div id="outreachPulse"><div class="loading">Loading outreach pulse...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
                 <p class="kicker">Delivery Funnel</p>
                 <h2>Outreach Health</h2>
               </div>
@@ -225,6 +337,16 @@ def render_dashboard_shell():
             </div>
             <div class="triple" id="healthGrid"><div class="loading">Loading outreach health...</div></div>
             <div id="healthFunnel"><div class="loading">Loading outreach funnel...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Trends</p>
+                <h2>Activity Timeline</h2>
+              </div>
+            </div>
+            <div id="activityTimeline"><div class="loading">Loading activity timeline...</div></div>
           </section>
 
           <section class="panel">
@@ -244,6 +366,16 @@ def render_dashboard_shell():
                 <div class="list" id="stageDistribution"></div>
               </div>
             </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Filters</p>
+                <h2>Search And Narrow The View</h2>
+              </div>
+            </div>
+            <div id="filterBar"><div class="loading">Loading filters...</div></div>
           </section>
 
           <section class="panel">
@@ -284,6 +416,26 @@ def render_dashboard_shell():
           <section class="panel">
             <div class="panel-head">
               <div>
+                <p class="kicker">Failures</p>
+                <h2>Delivery Risk And Error Drilldown</h2>
+              </div>
+            </div>
+            <div id="failureDrilldown"><div class="loading">Loading recent failures...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Run History</p>
+                <h2>Recent Bot Sessions</h2>
+              </div>
+            </div>
+            <div id="runHistory"><div class="loading">Loading bot run history...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
                 <p class="kicker">Lead Monitor</p>
                 <h2>Recent and Priority Leads</h2>
               </div>
@@ -303,11 +455,41 @@ def render_dashboard_shell():
           <section class="panel">
             <div class="panel-head">
               <div>
+                <p class="kicker">Notifications</p>
+                <h2>Latest Signals</h2>
+              </div>
+            </div>
+            <div id="notificationCenter"><div class="loading">Loading notifications...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
                 <p class="kicker">Automation</p>
                 <h2>Bot Runtime</h2>
               </div>
             </div>
             <div id="automationPanel"><div class="loading">Loading bot runtime...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Controls</p>
+                <h2>Bot Controls</h2>
+              </div>
+            </div>
+            <div id="botControls"><div class="loading">Loading bot controls...</div></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="kicker">Delivery</p>
+                <h2>SMTP And Sending Health</h2>
+              </div>
+            </div>
+            <div id="smtpHealth"><div class="loading">Loading sending health...</div></div>
           </section>
 
           <section class="panel">
@@ -393,7 +575,11 @@ def render_dashboard_shell():
     </main>
     <script>
       const REFRESH_INTERVAL_MS = 30000;
-      const state = { payload: null, selectedLeadId: null };
+      const state = {
+        payload: null,
+        selectedLeadId: null,
+        filters: { search: '', status: 'all', city: 'all', niche: 'all', eventType: 'all' },
+      };
 
       function escapeHtml(value) {
         return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -414,16 +600,26 @@ def render_dashboard_shell():
         return Number.isFinite(number) ? `${number.toFixed(1)}%` : '--';
       }
 
+      function parseDateValue(value) {
+        if (value === null || value === undefined || value === '') return null;
+        if (typeof value === 'number') return new Date(value * 1000);
+        const text = String(value).trim();
+        if (!text) return null;
+        if (/^\\d+(\\.\\d+)?$/.test(text)) return new Date(Number(text) * 1000);
+        return new Date(text.replace(' ', 'T'));
+      }
+
       function formatDate(value) {
         if (!value) return '--';
-        const date = new Date(String(value).replace(' ', 'T'));
-        return Number.isNaN(date.getTime()) ? escapeHtml(value) : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+        const date = parseDateValue(value);
+        if (!date || Number.isNaN(date.getTime())) return escapeHtml(value);
+        return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
       }
 
       function formatRelative(value) {
         if (!value) return '--';
-        const date = new Date(String(value).replace(' ', 'T'));
-        if (Number.isNaN(date.getTime())) return '--';
+        const date = parseDateValue(value);
+        if (!date || Number.isNaN(date.getTime())) return '--';
         const delta = Math.round((date.getTime() - Date.now()) / 60000);
         if (Math.abs(delta) < 1) return 'just now';
         if (Math.abs(delta) < 60) return delta > 0 ? `in ${delta}m` : `${Math.abs(delta)}m ago`;
@@ -462,6 +658,10 @@ def render_dashboard_shell():
         if (days > 0) return `${days}d ${hours}h`;
         if (hours > 0) return `${hours}h ${minutes}m`;
         return `${minutes}m`;
+      }
+
+      function filterValue(value) {
+        return String(value || '').trim().toLowerCase();
       }
 
       function pillClass(status) {
@@ -506,11 +706,48 @@ def render_dashboard_shell():
       }
 
       function mergeLeadViews(payload) {
+        if (payload.lead_feed && payload.lead_feed.length) return payload.lead_feed;
         const ids = new Map();
         [...(payload.top_leads || []), ...(payload.recent_leads || []), ...(payload.due_followups || [])].forEach((lead) => {
           if (lead && lead.id && !ids.has(lead.id)) ids.set(lead.id, lead);
         });
         return [...ids.values()].slice(0, 14);
+      }
+
+      function leadMatches(lead) {
+        const filters = state.filters || {};
+        const search = filterValue(filters.search);
+        const haystack = [
+          lead.business_name,
+          lead.email,
+          lead.phone,
+          lead.city,
+          lead.niche,
+          lead.status,
+          lead.sequence_stage,
+        ].map(filterValue).join(' ');
+        if (search && !haystack.includes(search)) return false;
+        if (filters.status !== 'all' && filterValue(lead.status) !== filterValue(filters.status)) return false;
+        if (filters.city !== 'all' && filterValue(lead.city) !== filterValue(filters.city)) return false;
+        if (filters.niche !== 'all' && filterValue(lead.niche) !== filterValue(filters.niche)) return false;
+        return true;
+      }
+
+      function eventMatches(event) {
+        const filters = state.filters || {};
+        const search = filterValue(filters.search);
+        const haystack = [
+          event.business_name,
+          event.summary,
+          event.city,
+          event.niche,
+          event.event_type,
+        ].map(filterValue).join(' ');
+        if (search && !haystack.includes(search)) return false;
+        if (filters.eventType !== 'all' && filterValue(event.event_type) !== filterValue(filters.eventType)) return false;
+        if (filters.city !== 'all' && filterValue(event.city) !== filterValue(filters.city)) return false;
+        if (filters.niche !== 'all' && filterValue(event.niche) !== filterValue(filters.niche)) return false;
+        return true;
       }
 
       function renderHero(payload) {
@@ -591,6 +828,139 @@ def render_dashboard_shell():
             </div>
           </div>
         `;
+      }
+
+      function renderOutreachPulse(payload) {
+        const proof = payload.proof_of_outreach || {};
+        const lastSignal = proof.last_outreach_signal || {};
+        const lastSend = proof.last_live_send || {};
+        const lastReply = proof.last_reply || {};
+        const lastRun = proof.last_run || {};
+        const pulseTone = ['working', 'active'].includes(proof.pulse_status) ? 'good' : ['warming'].includes(proof.pulse_status) ? 'warming' : proof.pulse_status || 'idle';
+        document.getElementById('outreachPulse').innerHTML = `
+          <div class="pulse-grid">
+            <article class="pulse-card ${escapeHtml(pulseTone)}">
+              <div class="tag-row">
+                <span class="pulse-dot"></span>
+                <span class="badge">${escapeHtml((proof.pulse_status || 'idle').replaceAll('_', ' '))}</span>
+              </div>
+              <h3>${escapeHtml(proof.pulse_title || 'No outreach pulse yet')}</h3>
+              <p>${escapeHtml(proof.pulse_message || 'No recent outreach proof is available yet.')}</p>
+              <div class="tag-row" style="margin-top:16px;">
+                <span class="badge">Last signal ${escapeHtml(formatRelative(lastSignal.timestamp))}</span>
+                <span class="badge">Last send ${escapeHtml(formatRelative(lastSend.timestamp))}</span>
+                <span class="badge">Last run ${escapeHtml(formatRelative(lastRun.finished_at || lastRun.started_at))}</span>
+              </div>
+            </article>
+            <div class="timeline-grid">
+              ${[
+                ['Latest signal', lastSignal.event_type ? `${(lastSignal.event_type || '').replaceAll('_', ' ')} for ${lastSignal.business_name || 'a lead'}` : 'No stored outreach signal yet.', lastSignal.timestamp],
+                ['Latest live send', lastSend.business_name ? `${lastSend.business_name} was emailed.` : 'No live send has been stored yet.', lastSend.timestamp],
+                ['Latest reply', lastReply.business_name ? `${lastReply.business_name} generated a reply or conversion signal.` : 'No reply or conversion signal yet.', lastReply.timestamp],
+                ['Latest run', lastRun.status ? `${lastRun.status} via ${lastRun.trigger || 'scheduled'} run with ${formatNumber(lastRun.emails_sent || 0)} email(s).` : 'No bot run history yet.', lastRun.finished_at || lastRun.started_at],
+              ].map(([label, message, timestamp]) => `
+                <article class="signal-card">
+                  <div class="label">${escapeHtml(label)}</div>
+                  <div style="font-weight:700;margin-top:6px;">${escapeHtml(message)}</div>
+                  <div class="muted" style="margin-top:6px;">${escapeHtml(formatDate(timestamp))} (${escapeHtml(formatRelative(timestamp))})</div>
+                </article>
+              `).join('')}
+            </div>
+          </div>
+        `;
+        document.title = ['working', 'active'].includes(proof.pulse_status) ? 'Dashboard | Outreach Active' : 'Dashboard | Monitoring';
+      }
+
+      function renderActivityTimeline(payload) {
+        const rows = payload.activity_series || [];
+        if (!rows.length) {
+          document.getElementById('activityTimeline').innerHTML = '<div class="empty">Activity charts will appear after the bot stores leads or email events.</div>';
+          return;
+        }
+        const max = Math.max(...rows.flatMap((row) => [row.leads, row.sent, row.replies, row.conversions].map((value) => Number(value || 0))), 1);
+        const funnel = payload.outreach_funnel || [];
+        const funnelMax = Math.max(...funnel.map((item) => Number(item.count || 0)), 1);
+        document.getElementById('activityTimeline').innerHTML = `
+          <div class="analytics-grid">
+            <div class="trend-shell">
+              <div class="legend">
+                <span class="legend-item"><span class="legend-swatch" style="background:#0f766e;"></span>Leads</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:#3b82f6;"></span>Sent</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:#d97706;"></span>Replies</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:#16a34a;"></span>Conversions</span>
+              </div>
+              <div class="trend-bars">
+                ${rows.map((row) => `
+                  <div class="trend-day">
+                    <div class="trend-stack">
+                      <div class="trend-col leads" style="height:${Math.max(6, Math.round((Number(row.leads || 0) / max) * 160))}px"></div>
+                      <div class="trend-col sent" style="height:${Math.max(6, Math.round((Number(row.sent || 0) / max) * 160))}px"></div>
+                      <div class="trend-col replies" style="height:${Math.max(6, Math.round((Number(row.replies || 0) / max) * 160))}px"></div>
+                      <div class="trend-col conversions" style="height:${Math.max(6, Math.round((Number(row.conversions || 0) / max) * 160))}px"></div>
+                    </div>
+                    <div class="trend-meta">
+                      <strong>${escapeHtml(row.label.slice(5))}</strong>
+                      <div class="muted">${escapeHtml(formatNumber(Number(row.sent || 0)))} sent</div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            <div class="history-shell">
+              <div class="muted">Lead-to-conversion funnel</div>
+              <div class="funnel-strip">
+                ${funnel.map((step) => `
+                  <div class="funnel-row">
+                    <div><strong>${escapeHtml(step.label || 'Step')}</strong></div>
+                    <div class="mini-bar"><div class="mini-fill" style="width:${Math.max(6, Math.round((Number(step.count || 0) / funnelMax) * 100))}%"></div></div>
+                    <div><strong>${escapeHtml(formatNumber(step.count || 0))}</strong></div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderFilterBar(payload) {
+        const filters = payload.filters || {};
+        const buildOptions = (items, selected) => ['<option value="all">All</option>', ...(items || []).map((item) => `<option value="${escapeHtml(item)}" ${selected === item ? 'selected' : ''}>${escapeHtml(item)}</option>`)].join('');
+        document.getElementById('filterBar').innerHTML = `
+          <div class="filter-row">
+            <input class="field" id="filterSearch" type="search" placeholder="Search leads, cities, niches, events..." value="${escapeHtml(state.filters.search || '')}">
+            <select class="field compact" id="filterStatus">${buildOptions(filters.statuses, state.filters.status)}</select>
+            <select class="field compact" id="filterCity">${buildOptions(filters.cities, state.filters.city)}</select>
+            <select class="field compact" id="filterNiche">${buildOptions(filters.niches, state.filters.niche)}</select>
+            <select class="field compact" id="filterEventType">${buildOptions(filters.event_types, state.filters.eventType)}</select>
+            <button class="button ghost" id="clearFilters" type="button">Clear Filters</button>
+          </div>
+        `;
+
+        document.getElementById('filterSearch').addEventListener('input', (event) => {
+          state.filters.search = event.target.value || '';
+          rerenderFilteredViews();
+        });
+        document.getElementById('filterStatus').addEventListener('change', (event) => {
+          state.filters.status = event.target.value || 'all';
+          rerenderFilteredViews();
+        });
+        document.getElementById('filterCity').addEventListener('change', (event) => {
+          state.filters.city = event.target.value || 'all';
+          rerenderFilteredViews();
+        });
+        document.getElementById('filterNiche').addEventListener('change', (event) => {
+          state.filters.niche = event.target.value || 'all';
+          rerenderFilteredViews();
+        });
+        document.getElementById('filterEventType').addEventListener('change', (event) => {
+          state.filters.eventType = event.target.value || 'all';
+          rerenderFilteredViews();
+        });
+        document.getElementById('clearFilters').addEventListener('click', () => {
+          state.filters = { search: '', status: 'all', city: 'all', niche: 'all', eventType: 'all' };
+          renderFilterBar(state.payload || payload);
+          rerenderFilteredViews();
+        });
       }
 
       function renderHealth(payload) {
@@ -688,6 +1058,127 @@ def render_dashboard_shell():
         `).join('')}</div>`;
       }
 
+      function renderNotificationCenter(payload) {
+        const notifications = payload.notifications || [];
+        if (!notifications.length) {
+          document.getElementById('notificationCenter').innerHTML = '<div class="empty">No notifications yet.</div>';
+          return;
+        }
+        document.getElementById('notificationCenter').innerHTML = `<div class="notification-list">${notifications.map((item) => `
+          <article class="notification-item ${escapeHtml(item.level || 'info')}">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+              <strong>${escapeHtml(item.title || 'Notification')}</strong>
+              <span class="muted">${escapeHtml(formatRelative(item.timestamp))}</span>
+            </div>
+            <div class="muted" style="margin-top:8px;">${escapeHtml(item.message || '')}</div>
+          </article>
+        `).join('')}</div>`;
+      }
+
+      function renderBotControls(payload) {
+        const automation = payload.automation || {};
+        const selectedInterval = String(Math.max(60, Number(automation.loop_interval_seconds || 900)));
+        document.getElementById('botControls').innerHTML = `
+          <div class="control-row">
+            <button class="button primary" id="runBotNowSecondary" type="button">Run Now</button>
+            <button class="button ghost" id="pauseBotButton" type="button">${automation.paused ? 'Paused' : 'Pause Auto'}</button>
+            <button class="button secondary" id="resumeBotButton" type="button">Resume Auto</button>
+          </div>
+          <div class="control-row">
+            <select class="field compact" id="intervalSelect">
+              <option value="300" ${selectedInterval === '300' ? 'selected' : ''}>5 min</option>
+              <option value="900" ${selectedInterval === '900' ? 'selected' : ''}>15 min</option>
+              <option value="1800" ${selectedInterval === '1800' ? 'selected' : ''}>30 min</option>
+              <option value="3600" ${selectedInterval === '3600' ? 'selected' : ''}>60 min</option>
+            </select>
+            <button class="button ghost" id="saveIntervalButton" type="button">Save Interval</button>
+          </div>
+          <div class="muted" style="margin-top:12px;">Schedule source: ${escapeHtml(automation.schedule_source || 'env')}.</div>
+        `;
+
+        document.getElementById('runBotNowSecondary').addEventListener('click', async () => {
+          await queueBotRun();
+        });
+        document.getElementById('pauseBotButton').addEventListener('click', async () => {
+          await controlBot('/api/bot/pause');
+        });
+        document.getElementById('resumeBotButton').addEventListener('click', async () => {
+          await controlBot('/api/bot/resume');
+        });
+        document.getElementById('saveIntervalButton').addEventListener('click', async () => {
+          const seconds = document.getElementById('intervalSelect').value || '900';
+          await controlBot(`/api/bot/interval/${seconds}`);
+        });
+      }
+
+      function renderSmtpHealth(payload) {
+        const smtp = payload.smtp_health || {};
+        const sendWindow = smtp.send_window || {};
+        document.getElementById('smtpHealth').innerHTML = `
+          <div class="quad">
+            ${[
+              ['SMTP', smtp.smtp_ready ? `Ready (${formatNumber(smtp.smtp_accounts || 0)})` : 'Not ready'],
+              ['IMAP', smtp.imap_ready ? 'Enabled' : 'Missing'],
+              ['Dry run', smtp.dry_run ? 'On' : 'Off'],
+              ['Send window', sendWindow.is_open ? 'Open' : 'Closed'],
+            ].map(([label, value]) => `<div class="signal-card"><div class="label">${escapeHtml(label)}</div><div style="font-weight:700;margin-top:6px;">${escapeHtml(value)}</div></div>`).join('')}
+          </div>
+          <div class="config-grid" style="margin-top:12px;">
+            <div class="config-item"><div class="label">Daily sends</div><strong>${escapeHtml(formatNumber(smtp.daily_actions || 0))} / ${escapeHtml(formatNumber(smtp.max_daily_actions || 0))}</strong></div>
+            <div class="config-item"><div class="label">Remaining today</div><strong>${escapeHtml(formatNumber(smtp.daily_remaining || 0))}</strong></div>
+            <div class="config-item"><div class="label">Domain cap</div><strong>${escapeHtml(formatNumber(smtp.max_domain_sends_per_day || 0))}</strong></div>
+            <div class="config-item"><div class="label">City cap</div><strong>${escapeHtml(formatNumber(smtp.max_city_sends_per_day || 0))}</strong></div>
+            <div class="config-item"><div class="label">Persona cap</div><strong>${escapeHtml(formatNumber(smtp.max_persona_sends_per_day || 0))}</strong></div>
+            <div class="config-item"><div class="label">Last live send</div><strong>${escapeHtml(formatDate(smtp.last_live_send?.timestamp))}</strong></div>
+          </div>
+          ${smtp.last_failure ? `<div class="warning-item error" style="margin-top:12px;"><strong>Last delivery failure</strong><div class="muted">${escapeHtml(smtp.last_failure.business_name || 'Lead')} - ${escapeHtml(smtp.last_failure.reason || smtp.last_failure.summary || '')}</div></div>` : ''}
+        `;
+      }
+
+      function renderFailureDrilldown(payload) {
+        const rows = (payload.recent_failures || []).filter(eventMatches);
+        if (!rows.length) {
+          document.getElementById('failureDrilldown').innerHTML = '<div class="empty">No recent failures match the current filters.</div>';
+          return;
+        }
+        document.getElementById('failureDrilldown').innerHTML = `<div class="notification-list">${rows.map((item) => `
+          <article class="notification-item error row-link ${state.selectedLeadId === item.lead_id ? 'active' : ''}" data-lead-id="${escapeHtml(item.lead_id || '')}">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+              <strong>${escapeHtml((item.event_type || 'failure').replaceAll('_', ' '))}</strong>
+              <span class="muted">${escapeHtml(formatRelative(item.timestamp))}</span>
+            </div>
+            <div style="margin-top:8px;font-weight:700;">${escapeHtml(item.business_name || 'Unknown lead')}</div>
+            <div class="muted" style="margin-top:6px;">${escapeHtml(item.reason || item.summary || '')}</div>
+          </article>
+        `).join('')}</div>`;
+      }
+
+      function renderRunHistory(payload) {
+        const runs = payload.automation?.recent_runs || [];
+        if (!runs.length) {
+          document.getElementById('runHistory').innerHTML = '<div class="empty">Run history will appear after the bot completes a session.</div>';
+          return;
+        }
+        document.getElementById('runHistory').innerHTML = `<div class="run-list">${runs.map((run) => `
+          <article class="run-item">
+            <div class="tag-row" style="margin-bottom:10px;">
+              <span class="pill ${pillClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span>
+              <span class="tag" style="background:rgba(23,33,46,0.08);color:#17212e;">${escapeHtml(run.trigger || 'scheduled')}</span>
+              <span class="tag" style="background:rgba(23,33,46,0.08);color:#17212e;">${escapeHtml(formatUptime(run.duration_seconds || 0))}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">
+              <div>
+                <strong>${escapeHtml(formatNumber(run.emails_sent || 0))} email(s) sent</strong>
+                <div class="muted" style="margin-top:6px;">Started ${escapeHtml(formatDate(run.started_at))} and finished ${escapeHtml(formatDate(run.finished_at))}.</div>
+              </div>
+              <div class="muted">Exit ${escapeHtml(formatNumber(run.exit_code || 0))}</div>
+            </div>
+            ${run.error ? `<div class="warning-item error" style="margin-top:12px;"><strong>Error</strong><div class="muted">${escapeHtml(run.error)}</div></div>` : ''}
+            ${(run.output_tail || []).length ? `<div class="output-log">${escapeHtml((run.output_tail || []).join('\n'))}</div>` : ''}
+          </article>
+        `).join('')}</div>`;
+      }
+
       function renderExamples(payload) {
         const examples = payload.training_examples || [];
         if (!examples.length) {
@@ -726,9 +1217,9 @@ def render_dashboard_shell():
       }
 
       function renderEvents(payload) {
-        const rows = payload.recent_events || [];
+        const rows = (payload.recent_events || []).filter(eventMatches);
         if (!rows.length) {
-          document.getElementById('eventsTable').innerHTML = '<tr><td colspan="4" class="empty">No recent bot events yet.</td></tr>';
+          document.getElementById('eventsTable').innerHTML = '<tr><td colspan="4" class="empty">No recent bot events match the current filters.</td></tr>';
           return;
         }
         document.getElementById('eventsTable').innerHTML = rows.map((event) => `
@@ -742,9 +1233,9 @@ def render_dashboard_shell():
       }
 
       function renderFollowups(payload) {
-        const rows = payload.due_followups || [];
+        const rows = (payload.due_followups || []).filter(leadMatches);
         if (!rows.length) {
-          document.getElementById('followupsTable').innerHTML = '<tr><td colspan="5" class="empty">No follow-ups are due right now.</td></tr>';
+          document.getElementById('followupsTable').innerHTML = '<tr><td colspan="5" class="empty">No follow-ups match the current filters.</td></tr>';
           return;
         }
         document.getElementById('followupsTable').innerHTML = rows.map((lead) => `
@@ -759,9 +1250,9 @@ def render_dashboard_shell():
       }
 
       function renderLeads(payload) {
-        const leads = mergeLeadViews(payload);
+        const leads = mergeLeadViews(payload).filter(leadMatches);
         if (!leads.length) {
-          document.getElementById('leadsTable').innerHTML = '<tr><td colspan="5" class="empty">No leads have been saved yet.</td></tr>';
+          document.getElementById('leadsTable').innerHTML = '<tr><td colspan="5" class="empty">No leads match the current filters.</td></tr>';
           return;
         }
         document.getElementById('leadsTable').innerHTML = leads.map((lead) => `
@@ -785,6 +1276,7 @@ def render_dashboard_shell():
         const personas = (detail.recent_personas || []).map((persona) => `<span class="tag" style="background:rgba(15,118,110,0.10);color:#134e4a;">${escapeHtml(persona)}</span>`).join('') || '<span class="muted">No persona history yet.</span>';
         const services = (lead.services || []).map((service) => `<span class="tag" style="background:rgba(23,33,46,0.08);color:#17212e;">${escapeHtml(service)}</span>`).join('') || '<span class="muted">No extracted services stored.</span>';
         const timeline = (detail.timeline || []).length ? detail.timeline.slice(-10).reverse().map((item) => `<div class="timeline-item"><div class="tag-row"><span class="pill ${pillClass(item.event)}">${escapeHtml((item.event || '').replaceAll('_', ' '))}</span><span class="muted">${escapeHtml(formatDate(item.timestamp))}</span></div><div style="margin-top:8px;"><strong>${escapeHtml(item.summary || '')}</strong></div></div>`).join('') : '<div class="empty">No event timeline has been recorded for this lead yet.</div>';
+        const outcomes = (detail.recent_outcomes || []).length ? detail.recent_outcomes.slice(0, 6).map((item) => `<div class="timeline-item"><div class="tag-row"><span class="pill ${pillClass(item.type)}">${escapeHtml((item.type || '').replaceAll('_', ' '))}</span><span class="muted">${escapeHtml(formatRelative(item.timestamp))}</span></div><div style="margin-top:8px;">${escapeHtml(item.summary || '')}</div></div>`).join('') : '<div class="empty">No recent outcome records for this lead.</div>';
 
         document.getElementById('leadInspector').innerHTML = `
           <div class="tag-row" style="margin-bottom:12px;">
@@ -825,6 +1317,13 @@ def render_dashboard_shell():
             <div class="muted" style="white-space:pre-wrap;">${escapeHtml(detail.last_generated_email?.body_preview || 'No body preview stored yet.')}</div>
           </div>
 
+          <div class="panel" style="padding:16px;margin-bottom:16px;background:rgba(255,255,255,0.55);">
+            <p class="kicker">Recent outcomes</p>
+            <div>${outcomes}</div>
+          </div>
+
+          ${detail.last_prompt_payload ? `<div class="panel" style="padding:16px;margin-bottom:16px;background:rgba(255,255,255,0.55);"><p class="kicker">Latest prompt payload</p><div class="muted" style="white-space:pre-wrap;">${escapeHtml(detail.last_prompt_payload)}</div></div>` : ''}
+
           <div><p class="kicker">Timeline</p><div>${timeline}</div></div>
         `;
       }
@@ -839,6 +1338,42 @@ def render_dashboard_shell():
         const response = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' } });
         if (!response.ok) throw new Error(`Request failed: ${response.status}`);
         return response.json();
+      }
+
+      function rerenderFilteredViews() {
+        if (!state.payload) return;
+        renderEvents(state.payload);
+        renderFollowups(state.payload);
+        renderLeads(state.payload);
+        renderFailureDrilldown(state.payload);
+      }
+
+      async function controlBot(url) {
+        try {
+          await postJson(url);
+          await loadDashboard();
+        } catch (error) {
+          document.getElementById('warningsPanel').innerHTML = `<div class="error">Control action failed: ${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      async function queueBotRun() {
+        const button = document.getElementById('runBotButton');
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Queueing...';
+        }
+        try {
+          await postJson('/api/bot/run-now');
+          await loadDashboard();
+        } catch (error) {
+          document.getElementById('warningsPanel').innerHTML = `<div class="error">Failed to queue bot run: ${escapeHtml(error.message)}</div>`;
+        } finally {
+          if (button) {
+            button.disabled = false;
+            button.textContent = 'Run Bot Now';
+          }
+        }
       }
 
       async function loadLeadDetail(leadId, scrollToPanel = false) {
@@ -866,12 +1401,20 @@ def render_dashboard_shell():
           renderHero(payload);
           renderOverview(payload);
           renderActionCenter(payload);
+          renderOutreachPulse(payload);
           renderHealth(payload);
+          renderActivityTimeline(payload);
           renderPipeline(payload);
           renderDistributions(payload);
           renderAttributions(payload);
+          renderFilterBar(payload);
+          renderNotificationCenter(payload);
           renderAutomation(payload);
+          renderBotControls(payload);
+          renderSmtpHealth(payload);
           renderWarnings(payload);
+          renderFailureDrilldown(payload);
+          renderRunHistory(payload);
           renderExamples(payload);
           renderRuntime(payload);
           renderEvents(payload);
@@ -899,20 +1442,7 @@ def render_dashboard_shell():
       });
 
       document.getElementById('refreshButton').addEventListener('click', loadDashboard);
-      document.getElementById('runBotButton').addEventListener('click', async () => {
-        const button = document.getElementById('runBotButton');
-        button.disabled = true;
-        button.textContent = 'Queueing...';
-        try {
-          await postJson('/api/bot/run-now');
-          await loadDashboard();
-        } catch (error) {
-          document.getElementById('warningsPanel').innerHTML = `<div class="error">Failed to queue bot run: ${escapeHtml(error.message)}</div>`;
-        } finally {
-          button.disabled = false;
-          button.textContent = 'Run Bot Now';
-        }
-      });
+      document.getElementById('runBotButton').addEventListener('click', queueBotRun);
       loadDashboard();
       window.setInterval(loadDashboard, REFRESH_INTERVAL_MS);
     </script>

@@ -78,7 +78,7 @@ APP_BOOT_TS = time.time()
 BOT_MANAGER = BotManager(__file__)
 
 
-def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_limit=8):
+def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_limit=12):
     dm = DataManager()
     payload = build_dashboard_payload(
         dm,
@@ -96,6 +96,9 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
     health = payload.get("health", {})
     integrations = runtime.get("integrations") or {}
     email_window = runtime.get("email_window") or {}
+    proof = payload.get("proof_of_outreach") or {}
+    notifications = list(payload.get("notifications") or [])
+    recent_runs = list(automation.get("recent_runs") or [])
 
     total_leads = _safe_int(overview.get("total_leads"), 0)
     with_email = _safe_int(overview.get("with_email"), 0)
@@ -110,6 +113,10 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
     email_window_open = email_window.get("is_open")
     bot_enabled = bool(automation.get("enabled"))
     bot_status = automation.get("status")
+    last_live_send = proof.get("last_live_send") or {}
+    last_generated = proof.get("last_generated") or {}
+    last_signal = proof.get("last_outreach_signal") or {}
+    last_run = recent_runs[0] if recent_runs else None
 
     hard_blockers = []
     soft_blockers = []
@@ -221,6 +228,31 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
         readiness_status = "ready"
         readiness_summary = "The bot is active, the system is configured for live sending, and recent activity suggests the loop is healthy."
 
+    if bot_status == "running":
+        pulse_status = "active"
+        pulse_title = "Outreach loop is running now"
+        pulse_message = "The background runner is actively processing a bot session right now."
+    elif last_live_send.get("timestamp"):
+        pulse_status = "working"
+        pulse_title = "Live outreach is working"
+        pulse_message = f"The last recorded live send was for {last_live_send.get('business_name') or 'a lead'} at {last_live_send.get('timestamp')}."
+    elif last_generated.get("timestamp"):
+        pulse_status = "warming"
+        pulse_title = "Outreach generation is working"
+        pulse_message = f"The bot is generating outreach activity, but the latest stored signal is {last_generated.get('event_type') or 'generation'} rather than a confirmed live send."
+    elif last_run and last_run.get("status") == "success":
+        pulse_status = "warming"
+        pulse_title = "The runner is working, but no send was recorded yet"
+        pulse_message = "A recent bot run finished successfully, so the loop is alive, but the database still shows zero live sends for that run."
+    elif bot_status == "error":
+        pulse_status = "blocked"
+        pulse_title = "Outreach is blocked by a runner error"
+        pulse_message = automation.get("last_error") or "The last bot run failed before it could complete."
+    else:
+        pulse_status = "idle"
+        pulse_title = "Outreach has not shown proof of work yet"
+        pulse_message = "The dashboard is online, but there is not yet a recent run, send, or generated outreach signal to prove activity."
+
     readiness_checks = [
         {
             "label": "Background runner",
@@ -286,7 +318,7 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
                     "title": "Bot ran but has not sent email yet",
                     "message": "The runner completed a session, but zero emails have been recorded so far. Common reasons are no validated leads, missing SMTP credentials, send-window limits, or all candidates being throttled or filtered out.",
                 }
-            )
+        )
 
     if config.DRY_RUN:
         warnings.append(
@@ -341,6 +373,39 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
             }
         )
 
+    if pulse_status in {"working", "active"}:
+        notifications.insert(
+            0,
+            {
+                "level": "good",
+                "title": pulse_title,
+                "message": pulse_message,
+                "timestamp": last_live_send.get("timestamp") or last_signal.get("timestamp") or automation.get("last_run_started_at"),
+            },
+        )
+    elif pulse_status == "blocked":
+        notifications.insert(
+            0,
+            {
+                "level": "error",
+                "title": pulse_title,
+                "message": pulse_message,
+                "timestamp": automation.get("last_run_finished_at") or automation.get("last_run_started_at"),
+            },
+        )
+
+    for run in recent_runs[:3]:
+        if run.get("status") == "success":
+            notifications.append(
+                {
+                    "level": "info" if not run.get("emails_sent") else "good",
+                    "title": "Bot run completed",
+                    "message": f"{run.get('emails_sent') or 0} email(s) sent in the latest {run.get('trigger') or 'scheduled'} run.",
+                    "timestamp": run.get("finished_at"),
+                }
+            )
+            break
+
     for issue in config_issues:
         warnings.append(
             {
@@ -351,6 +416,13 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
         )
 
     payload["automation"] = automation
+    payload["proof_of_outreach"] = {
+        **proof,
+        "pulse_status": pulse_status,
+        "pulse_title": pulse_title,
+        "pulse_message": pulse_message,
+        "last_run": last_run,
+    }
     payload["readiness"] = {
         "status": readiness_status,
         "summary": readiness_summary,
@@ -358,6 +430,7 @@ def build_dashboard_response(recent_limit=12, event_limit=18, due_limit=10, top_
         "checks": readiness_checks,
     }
     payload["action_items"] = action_items[:6]
+    payload["notifications"] = notifications[:10]
     payload["warnings"] = warnings
     return payload
 
@@ -427,6 +500,18 @@ if FastAPI:
     @app.post("/api/bot/run-now")
     def bot_run_now():
         return BOT_MANAGER.request_run_now()
+
+    @app.post("/api/bot/pause")
+    def bot_pause():
+        return BOT_MANAGER.pause()
+
+    @app.post("/api/bot/resume")
+    def bot_resume():
+        return BOT_MANAGER.resume()
+
+    @app.post("/api/bot/interval/{seconds}")
+    def bot_set_interval(seconds: int):
+        return BOT_MANAGER.set_loop_interval(seconds)
 
     @app.websocket("/ws/logs")
     async def logs(ws: WebSocket):

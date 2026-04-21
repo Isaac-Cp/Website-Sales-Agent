@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from collections import deque
 from pathlib import Path
 
@@ -25,6 +26,14 @@ def _env_int(name, default):
         return default
 
 
+def _timestamp_iso(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.utcfromtimestamp(float(value)).replace(microsecond=0).isoformat() + "Z"
+    return value
+
+
 class BotManager:
     def __init__(self, script_path):
         self.script_path = Path(script_path).resolve()
@@ -35,6 +44,10 @@ class BotManager:
         self.run_requested = threading.Event()
         self.process = None
         self.output_tail = deque(maxlen=40)
+        self.recent_runs = deque(maxlen=12)
+        self.enabled_override = None
+        self.loop_interval_override_seconds = None
+        self.next_trigger_kind = "startup"
         self.state = {
             "enabled": self._autostart_enabled(),
             "status": "disabled",
@@ -53,12 +66,19 @@ class BotManager:
             "consecutive_failures": 0,
             "output_tail": [],
             "manual_run_available": True,
+            "recent_runs": [],
+            "schedule_source": "env",
+            "paused": not self._autostart_enabled(),
         }
 
     def _autostart_enabled(self):
+        if self.enabled_override is not None:
+            return bool(self.enabled_override)
         return _env_bool("BOT_AUTOSTART", default=bool(os.getenv("PORT")))
 
     def _loop_interval_seconds(self):
+        if self.loop_interval_override_seconds is not None:
+            return max(60, int(self.loop_interval_override_seconds))
         return max(60, _env_int("BOT_LOOP_INTERVAL_SECONDS", 900))
 
     def _run_timeout_seconds(self):
@@ -104,11 +124,20 @@ class BotManager:
 
     def _update_state(self, **updates):
         with self.lock:
-            self.state.update(updates)
+            normalized_updates = {}
+            for key, value in updates.items():
+                if key.endswith("_at"):
+                    normalized_updates[key] = _timestamp_iso(value)
+                else:
+                    normalized_updates[key] = value
+            self.state.update(normalized_updates)
             self.state["enabled"] = self._autostart_enabled()
             self.state["loop_interval_seconds"] = self._loop_interval_seconds()
             self.state["run_timeout_seconds"] = self._run_timeout_seconds()
             self.state["output_tail"] = list(self.output_tail)
+            self.state["recent_runs"] = list(self.recent_runs)
+            self.state["schedule_source"] = "override" if self.loop_interval_override_seconds is not None or self.enabled_override is not None else "env"
+            self.state["paused"] = not self._autostart_enabled()
 
     def snapshot(self):
         with self.lock:
@@ -117,6 +146,9 @@ class BotManager:
             snapshot["enabled"] = self._autostart_enabled()
             snapshot["loop_interval_seconds"] = self._loop_interval_seconds()
             snapshot["run_timeout_seconds"] = self._run_timeout_seconds()
+            snapshot["recent_runs"] = list(self.recent_runs)
+            snapshot["schedule_source"] = "override" if self.loop_interval_override_seconds is not None or self.enabled_override is not None else "env"
+            snapshot["paused"] = not self._autostart_enabled()
             return snapshot
 
     def start(self):
@@ -126,6 +158,65 @@ class BotManager:
             self.stop_event.clear()
             self.thread = threading.Thread(target=self._loop, name="bot-manager", daemon=True)
             self.thread.start()
+
+    def pause(self):
+        self.enabled_override = False
+        with self.lock:
+            status = self.state.get("status")
+        if status == "running":
+            self._update_state(
+                message="Pause requested. Current bot session will finish, then the runner will stay paused.",
+                next_run_at=None,
+            )
+        else:
+            self._update_state(
+                status="disabled",
+                message="Bot autostart has been paused from the dashboard.",
+                next_run_at=None,
+            )
+        return {
+            "accepted": True,
+            "status": self.snapshot().get("status"),
+            "message": "Bot autostart paused.",
+            "snapshot": self.snapshot(),
+        }
+
+    def resume(self):
+        self.enabled_override = True
+        self.start()
+        self.run_requested.set()
+        self.next_trigger_kind = "manual"
+        self._update_state(
+            status="queued",
+            message="Bot autostart resumed and a run has been queued.",
+            next_run_at=time.time(),
+        )
+        return {
+            "accepted": True,
+            "status": "queued",
+            "message": "Bot autostart resumed.",
+            "snapshot": self.snapshot(),
+        }
+
+    def set_loop_interval(self, seconds):
+        try:
+            seconds = int(seconds)
+        except Exception:
+            seconds = self._loop_interval_seconds()
+        seconds = max(60, seconds)
+        self.loop_interval_override_seconds = seconds
+        next_run = time.time() + seconds if self.snapshot().get("status") == "sleeping" and self._autostart_enabled() else self.snapshot().get("next_run_at")
+        self._update_state(
+            loop_interval_seconds=seconds,
+            next_run_at=next_run,
+            message=f"Bot schedule updated to run every {seconds} seconds.",
+        )
+        return {
+            "accepted": True,
+            "status": self.snapshot().get("status"),
+            "message": f"Bot interval updated to {seconds} seconds.",
+            "snapshot": self.snapshot(),
+        }
 
     def stop(self):
         self.stop_event.set()
@@ -150,6 +241,7 @@ class BotManager:
                     "snapshot": self.snapshot(),
                 }
         self.run_requested.set()
+        self.next_trigger_kind = "manual"
         self._update_state(
             status="queued",
             message="Manual bot run requested.",
@@ -173,16 +265,34 @@ class BotManager:
         except Exception:
             return
 
+    def _record_run(self, trigger_kind, started_at, finished_at, duration, exit_code, sent_delta, status, error=None):
+        output_tail = list(self.output_tail)[-8:]
+        run = {
+            "trigger": trigger_kind,
+            "started_at": _timestamp_iso(started_at),
+            "finished_at": _timestamp_iso(finished_at),
+            "duration_seconds": duration,
+            "exit_code": exit_code,
+            "emails_sent": sent_delta,
+            "status": status,
+            "error": error,
+            "output_tail": output_tail,
+        }
+        self.recent_runs.appendleft(run)
+        return run
+
     def _run_once(self):
         command = self._build_command()
         timeout_seconds = self._run_timeout_seconds()
         sent_before = self._sent_total()
         started_at = time.time()
+        trigger_kind = self.next_trigger_kind or "scheduled"
+        self.next_trigger_kind = "scheduled"
 
         self.output_tail.clear()
         self._update_state(
             status="running",
-            message="Bot session is running.",
+            message=f"Bot session is running ({trigger_kind}).",
             current_pid=None,
             last_run_started_at=started_at,
             last_error=None,
@@ -229,6 +339,16 @@ class BotManager:
         duration = max(0, int(finished_at - started_at))
 
         if timed_out:
+            self._record_run(
+                trigger_kind,
+                started_at,
+                finished_at,
+                duration,
+                exit_code,
+                sent_delta,
+                "error",
+                error=f"Timed out after {timeout_seconds} seconds.",
+            )
             self._update_state(
                 status="error",
                 message="Bot session timed out.",
@@ -243,6 +363,17 @@ class BotManager:
             return
 
         if exit_code and exit_code != 0:
+            last_error = list(self.output_tail)[-1] if self.output_tail else f"Exit code {exit_code}"
+            self._record_run(
+                trigger_kind,
+                started_at,
+                finished_at,
+                duration,
+                exit_code,
+                sent_delta,
+                "error",
+                error=last_error,
+            )
             self._update_state(
                 status="error",
                 message="Bot session exited with an error.",
@@ -251,11 +382,20 @@ class BotManager:
                 last_exit_code=exit_code,
                 last_run_emails_sent=sent_delta,
                 current_pid=None,
-                last_error=list(self.output_tail)[-1] if self.output_tail else f"Exit code {exit_code}",
+                last_error=last_error,
                 consecutive_failures=self.state.get("consecutive_failures", 0) + 1,
             )
             return
 
+        self._record_run(
+            trigger_kind,
+            started_at,
+            finished_at,
+            duration,
+            exit_code or 0,
+            sent_delta,
+            "success",
+        )
         self._update_state(
             status="sleeping",
             message="Bot session finished successfully.",
@@ -279,6 +419,7 @@ class BotManager:
         while not self.stop_event.is_set():
             remaining = next_run - time.time()
             if remaining <= 0:
+                self.next_trigger_kind = "scheduled"
                 return True
             if self.run_requested.wait(timeout=min(remaining, 1.0)):
                 self.run_requested.clear()
