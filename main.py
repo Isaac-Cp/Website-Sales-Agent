@@ -90,7 +90,8 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
     )
     automation = BOT_MANAGER.snapshot()
     warnings = []
-    config_issues = config.validate_config()
+    blocking_config_issues = config.validate_config()
+    optional_config_warnings = config.get_optional_config_warnings() if hasattr(config, "get_optional_config_warnings") else []
     runtime = payload.get("runtime", {})
     overview = payload.get("overview", {})
     health = payload.get("health", {})
@@ -215,6 +216,16 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
                 "level": "info",
                 "title": "Add an LLM key for stronger copy",
                 "message": "The bot can still send with generic templates, but adding GROQ_API_KEY or OPENAI_API_KEY will improve email quality and personalization.",
+            }
+        )
+
+    if runtime.get("database", {}).get("backend") == "sqlite" and not runtime.get("database_persistent", False):
+        soft_blockers.append("The app is using a non-persistent SQLite file, so deployment restarts can wipe the dashboard history.")
+        action_items.append(
+            {
+                "level": "warn",
+                "title": "Use a persistent database path",
+                "message": "Set DB_FILE to a persistent disk path such as /var/data/leads.db, or use DATABASE_URL so leads and history survive redeploys.",
             }
         )
 
@@ -406,7 +417,16 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
             )
             break
 
-    for issue in config_issues:
+    if runtime.get("database", {}).get("backend") == "sqlite" and not runtime.get("database_persistent", False):
+        warnings.append(
+            {
+                "level": "warn",
+                "title": "Database storage is ephemeral",
+                "message": f"The app is storing SQLite data at {runtime.get('database_path') or 'leads.db'}. On container restarts, that history can disappear unless DB_FILE points to persistent storage or DATABASE_URL is configured.",
+            }
+        )
+
+    for issue in blocking_config_issues:
         warnings.append(
             {
                 "level": "error",
@@ -415,6 +435,32 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
             }
         )
 
+    for issue in optional_config_warnings:
+        warnings.append(
+            {
+                "level": "info",
+                "title": "Optional upgrade",
+                "message": f"{issue}. The bot can still run and send using generic templates, but copy quality will be lower.",
+            }
+        )
+
+    if last_live_send.get("timestamp"):
+        proof_level = "live_send"
+    elif last_generated.get("timestamp"):
+        proof_level = "generated_only"
+    elif last_run and last_run.get("status") == "success":
+        proof_level = "runner_only"
+    else:
+        proof_level = "none"
+
+    live_send_ready = bool(
+        not config.DRY_RUN
+        and smtp_ready
+        and (email_window_open is not False)
+        and (daily_remaining > 0 or not max_daily_actions)
+        and with_email > 0
+    )
+
     payload["automation"] = automation
     payload["proof_of_outreach"] = {
         **proof,
@@ -422,12 +468,31 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
         "pulse_title": pulse_title,
         "pulse_message": pulse_message,
         "last_run": last_run,
+        "proof_level": proof_level,
+        "outreach_working": proof_level in {"live_send", "generated_only"} or bot_status == "running",
     }
     payload["readiness"] = {
         "status": readiness_status,
         "summary": readiness_summary,
         "blockers": hard_blockers + soft_blockers,
         "checks": readiness_checks,
+    }
+    payload["deployment_diagnostics"] = {
+        "live_send_ready": live_send_ready,
+        "proof_level": proof_level,
+        "dry_run": bool(config.DRY_RUN),
+        "smtp_ready": smtp_ready,
+        "bot_autostart_enabled": bot_enabled,
+        "email_window_open": email_window_open,
+        "daily_remaining": daily_remaining,
+        "max_daily_actions": max_daily_actions,
+        "lead_contacts": with_email,
+        "total_leads": total_leads,
+        "database_persistent": runtime.get("database_persistent", False),
+        "database_path": runtime.get("database_path"),
+        "blocking_issues": hard_blockers + blocking_config_issues,
+        "attention_issues": soft_blockers,
+        "optional_warnings": optional_config_warnings,
     }
     payload["action_items"] = action_items[:6]
     payload["notifications"] = notifications[:10]
@@ -1169,9 +1234,12 @@ def main():
     osm = osm_scraper.OsmScraper()
     # apollo = apollo_scraper.ApolloScraper() # Removed
     
-    cfg_issues = config.validate_config()
-    if cfg_issues and not config.DRY_RUN:
-        log("config_issues", issues=cfg_issues)
+    blocking_issues = config.validate_config()
+    optional_issues = config.get_optional_config_warnings() if hasattr(config, "get_optional_config_warnings") else []
+    if optional_issues:
+        log("config_warnings", issues=optional_issues)
+    if blocking_issues and not config.DRY_RUN:
+        log("config_issues", issues=blocking_issues)
         config.DRY_RUN = True
     
     driver = scraper.get_driver()

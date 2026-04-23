@@ -3,7 +3,10 @@ import json
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+try:
+    load_dotenv()
+except Exception:
+    pass  # Ignore if .env not found, like on cloud
 
 # --- Security & API Keys ---
 # CRITICAL: Never hardcode keys. They must be in the .env file.
@@ -82,11 +85,16 @@ def get_smtp_accounts():
         }]
     return []
 
-def validate_config():
-    """Checks for missing critical configuration."""
+def get_optional_config_warnings():
+    """Returns non-blocking warnings that shouldn't stop live sending."""
     issues = []
     if not GROQ_API_KEY and not OPENAI_API_KEY:
         issues.append("Missing LLM API Keys (GROQ_API_KEY or OPENAI_API_KEY)")
+    return issues
+
+def validate_config():
+    """Checks for missing blocking configuration."""
+    issues = []
     if not get_smtp_accounts():
         issues.append("Missing SMTP Credentials")
     return issues
@@ -106,6 +114,7 @@ BATCH_SIZE = 100
 BATCH_DELAY_MINUTES = 1
 FASTAPI_PORT = int(os.getenv("PORT", os.getenv("FASTAPI_PORT", 8000)))
 DATABASE_URL = os.getenv("DATABASE_URL")
+DB_FILE = os.getenv("DB_FILE", "/var/data/leads.db" if os.path.isdir("/var/data") else "leads.db")
 DEFAULT_TECH = os.getenv("DEFAULT_TECH", "Shopify")
 DEFAULT_TITLES = os.getenv("DEFAULT_TITLES", "owner,ceo,founder,marketing director,sales director")
 LOGFIRE_API_KEY = os.getenv("LOGFIRE_API_KEY")
@@ -175,7 +184,6 @@ SELECTORS = {
 }
 
 # --- Database ---
-DB_FILE = "leads.db"
 MAX_DAILY_ACTIONS = 600  # Daily email limit
 MAX_DOMAIN_SENDS_PER_DAY = int(os.getenv("MAX_DOMAIN_SENDS_PER_DAY", 10))
 MAX_CITY_SENDS_PER_DAY = int(os.getenv("MAX_CITY_SENDS_PER_DAY", 50))

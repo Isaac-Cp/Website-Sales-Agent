@@ -144,6 +144,15 @@ def _database_size_bytes():
         return None
 
 
+def _database_persistence_state():
+    if getattr(config, "DATABASE_URL", None):
+        return {"persistent": True, "path": getattr(config, "DATABASE_URL", None)}
+    db_path = Path(getattr(config, "DB_FILE", "leads.db"))
+    db_text = str(db_path).replace("\\", "/")
+    persistent = db_text.startswith("/var/data/") or "/render/project/src/.render/" in db_text
+    return {"persistent": persistent, "path": str(db_path)}
+
+
 def _email_window_state():
     start_text = getattr(config, "EMAIL_WINDOW_START", "00:00")
     end_text = getattr(config, "EMAIL_WINDOW_END", "23:59")
@@ -182,6 +191,7 @@ def _integration_summary():
 
 def _runtime_summary(boot_timestamp):
     database_summary = _database_target_summary()
+    persistence = _database_persistence_state()
     bot_autostart = os.getenv("BOT_AUTOSTART")
     bot_autostart_enabled = str(bot_autostart).strip().lower() in {"1", "true", "yes", "on"} if bot_autostart is not None else bool(os.getenv("PORT"))
     return {
@@ -190,6 +200,8 @@ def _runtime_summary(boot_timestamp):
         "booted_at": dt.datetime.utcfromtimestamp(boot_timestamp).replace(microsecond=0).isoformat() + "Z",
         "uptime_seconds": max(0, int(dt.datetime.utcnow().timestamp() - boot_timestamp)),
         "database": database_summary,
+        "database_path": persistence["path"],
+        "database_persistent": persistence["persistent"],
         "database_size_bytes": _database_size_bytes(),
         "dry_run": bool(getattr(config, "DRY_RUN", False)),
         "headless": bool(getattr(config, "HEADLESS", True)),
