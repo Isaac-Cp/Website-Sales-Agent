@@ -30,6 +30,9 @@ def render_dashboard_shell():
     .sec{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}.sec p{margin:0 0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em;font-weight:700}
     .muted{color:var(--muted)}
     .toolbar{position:sticky;top:10px;z-index:20;margin-top:18px;background:rgba(255,251,246,.94)}
+    .filters{display:flex;flex-wrap:wrap;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);background:rgba(255,251,246,.94);backdrop-filter:blur(8px)}
+    .filter-summary{font-size:12px;color:var(--muted);padding:8px 0;text-align:center}
+    .banner{background:var(--badbg);color:var(--bad);padding:12px;text-align:center;border:1px solid var(--bad);margin:10px 0;border-radius:8px}
     .field,.select{min-width:120px;padding:11px 12px;border-radius:16px;border:1px solid rgba(22,34,51,.16);background:rgba(255,255,255,.88);font:inherit;color:var(--ink)}.search{min-width:260px;flex:1 1 260px}
     .btn{border:0;cursor:pointer;text-decoration:none;font:inherit}.btn.primary{background:linear-gradient(180deg,#fde68a,#f59e0b);color:#10201f}.btn.secondary{background:rgba(255,255,255,.12);color:#f8fafc}.btn.ghost{background:rgba(22,34,51,.08);color:var(--ink)}
     .metrics{grid-template-columns:repeat(5,minmax(0,1fr))}.proof{grid-template-columns:repeat(4,minmax(0,1fr))}.split{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -111,6 +114,8 @@ def render_dashboard_shell():
       <input class="field" id="dateTo" type="date" placeholder="To">
       <button class="btn" id="clearFilters">🗑️ Clear</button>
     </div>
+    <div class="filter-summary" id="filterSummary"></div>
+    <div class="banner" id="banner" style="display:none;"></div>
 
     <div class="grid">
       <div class="card">
@@ -229,8 +234,10 @@ def render_dashboard_shell():
 
     function toggleDarkMode() {
       document.body.classList.toggle('dark-mode');
+      const isDark = document.body.classList.contains('dark-mode');
+      localStorage.setItem('darkMode', isDark);
       const btn = $('darkModeToggle');
-      btn.textContent = document.body.classList.contains('dark-mode') ? '☀️ Light Mode' : '🌙 Dark Mode';
+      btn.textContent = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
     }
 
     // Auto-refresh function
@@ -268,7 +275,7 @@ def render_dashboard_shell():
     }
 
     function renderMetrics(p){
-      const o=p.overview||{},h=p.health||{},items=[['Leads stored',num(o.total_leads),`${num(o.high_value)} high-value`],['Leads with email',num(o.with_email),`${num(o.with_phone)} with phone`],['Emails sent',num(h.sent_total),`${pct(h.open_rate)} open · ${pct(h.reply_rate)} reply`],['Replies',num(h.reply_total),`${num(h.conversion_total)} conversions`],['Due follow-ups',num(o.due_followups),`${num(o.daily_remaining)} remaining`]];
+      const o=p.overview||{},h=p.health||{},items=[['👥 Leads stored',num(o.total_leads),`${num(o.high_value)} high-value`],['📧 Leads with email',num(o.with_email),`${num(o.with_phone)} with phone`],['📤 Emails sent',num(h.sent_total),`${pct(h.open_rate)} open · ${pct(h.reply_rate)} reply`],['💬 Replies',num(h.reply_total),`${num(h.conversion_total)} conversions`],['⏰ Due follow-ups',num(o.due_followups),`${num(o.daily_remaining)} remaining`]];
       $('metrics').innerHTML=items.map(([l,v,n])=>`<div class="metric"><div><div class="value">${v}</div><div class="label">${l}</div></div><div class="label">${n}</div></div>`).join('');
     }
 
@@ -395,9 +402,15 @@ def render_dashboard_shell():
     async function queueRun(){const a=$('runBtn'),b=$('runNowControl');if(a){a.disabled=true;a.textContent='Queueing...'}if(b){b.disabled=true;b.textContent='Queueing...'}try{await post('/api/bot/run-now');await load()}catch(e){$('notices').innerHTML=`<div class="error">Failed to queue bot run: ${esc(e.message)}</div>`}finally{if(a){a.disabled=false;a.textContent='Run bot now'}if(b){b.disabled=false;b.textContent='Run now'}}}
     async function loadDetail(id,scroll=false){if(!id)return;state.leadId=Number(id);try{renderDetail(await get(`/api/dashboard/leads/${state.leadId}`));renderEvents(state.payload||{recent_events:[]});renderFollowups(state.payload||{due_followups:[]});renderLeads(state.payload||{lead_feed:[]});if(scroll)$('detail').scrollIntoView({behavior:'smooth',block:'start'})}catch(e){$('detail').innerHTML=`<div class="error">Failed to load lead detail: ${esc(e.message)}</div>`}}
     function rerender(){if(!state.payload)return;const ve=(state.payload.recent_events||[]).filter(eventMatch).length,vl=merge(state.payload).filter(leadMatch).length,vf=(state.payload.due_followups||[]).filter(leadMatch).length;$('filterSummary').textContent=`${vl} lead(s), ${vf} due follow-up(s), and ${ve} event(s) match the current filters.`;renderEvents(state.payload);renderFollowups(state.payload);renderLeads(state.payload)}
-    async function load(){const b=$('refreshBtn');if(b){b.disabled=true;b.textContent='🔄 Refreshing...'}try{const p=await get('/api/dashboard');state.payload=p;renderFilters(p);renderMetrics(p);renderProof(p);renderDays(p);renderFunnel(p);renderPipeline(p);renderAttribution(p);renderControls(p);renderDiag(p);renderNotices(p);renderRuns(p);renderExamples(p);rerender();if(!state.leadId){const firstLead=(p.due_followups&&p.due_followups[0])||(p.lead_feed&&p.lead_feed[0])||(p.recent_leads&&p.recent_leads[0]);if(firstLead&&firstLead.id)state.leadId=firstLead.id}state.leadId?await loadDetail(state.leadId,false):renderDetail(null)}catch(e){console.error(e)}finally{if(b){b.disabled=false;b.textContent='🔄 Refresh'}}}
+    async function load(){const b=$('refreshBtn');if(b){b.disabled=true;b.textContent='🔄 Refreshing...'}try{const p=await get('/api/dashboard');state.payload=p;if(!p.deployment_diagnostics?.database_persistent){$('banner').style.display='block';$('banner').innerHTML='<strong>⚠️ Database Not Persistent:</strong> Your data will be lost on app restart. Set DATABASE_URL to a PostgreSQL database for persistence.';}else{$('banner').style.display='none';}renderFilters(p);renderMetrics(p);renderProof(p);renderDays(p);renderFunnel(p);renderPipeline(p);renderAttribution(p);renderControls(p);renderDiag(p);renderNotices(p);renderRuns(p);renderExamples(p);rerender();if(!state.leadId){const firstLead=(p.due_followups&&p.due_followups[0])||(p.lead_feed&&p.lead_feed[0])||(p.recent_leads&&p.recent_leads[0]);if(firstLead&&firstLead.id)state.leadId=firstLead.id}state.leadId?await loadDetail(state.leadId,false):renderDetail(null)}catch(e){console.error(e)}finally{if(b){b.disabled=false;b.textContent='🔄 Refresh'}}}
     document.addEventListener('click',e=>{const row=e.target.closest('[data-lead-id]');if(!row)return;const id=row.getAttribute('data-lead-id');if(id)loadDetail(id,true)});
-    $('refreshBtn').addEventListener('click',load);$('runBtn').addEventListener('click',queueRun);$('exportLeadsBtn').addEventListener('click', exportLeads);$('exportEventsBtn').addEventListener('click', exportEvents);$('darkModeToggle').addEventListener('click', toggleDarkMode);load();window.setInterval(load,REFRESH);
+    $('refreshBtn').addEventListener('click',load);$('runBtn').addEventListener('click',queueRun);$('exportLeadsBtn').addEventListener('click', exportLeads);$('exportEventsBtn').addEventListener('click', exportEvents);$('darkModeToggle').addEventListener('click', toggleDarkMode);
+    // Load dark mode preference
+    if (localStorage.getItem('darkMode') === 'true') {
+      document.body.classList.add('dark-mode');
+      $('darkModeToggle').textContent = '☀️ Light Mode';
+    }
+    load();window.setInterval(load,REFRESH);
   </script>
 </body>
 </html>
