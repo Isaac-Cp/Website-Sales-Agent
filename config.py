@@ -210,6 +210,26 @@ BLACKLISTED_EMAILS = [addr.strip().lower() for addr in os.getenv("BLACKLISTED_EM
 DELAY_MIN = 5
 DELAY_MAX = 15
 
+# --- Free Tier Data Retention (aggressive cleanup) ---
+if is_resource_constrained:
+    EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", 7))    # Keep only 7 days
+    RUN_HISTORY_LIMIT = int(os.getenv("RUN_HISTORY_LIMIT", 5))          # Store only 5 runs
+    DASHBOARD_RECENT_LIMIT = int(os.getenv("DASHBOARD_RECENT_LIMIT", 20))  # Show 20 recent items
+    DASHBOARD_PAGINATION_SIZE = int(os.getenv("DASHBOARD_PAGINATION_SIZE", 25))  # Pages of 25
+    
+    # API caching
+    DASHBOARD_CACHE_SECONDS = int(os.getenv("DASHBOARD_CACHE_SECONDS", 30))  # Cache for 30s
+else:
+    EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", 30))
+    RUN_HISTORY_LIMIT = int(os.getenv("RUN_HISTORY_LIMIT", 12))
+    DASHBOARD_RECENT_LIMIT = int(os.getenv("DASHBOARD_RECENT_LIMIT", 50))
+    DASHBOARD_PAGINATION_SIZE = int(os.getenv("DASHBOARD_PAGINATION_SIZE", 100))
+    DASHBOARD_CACHE_SECONDS = int(os.getenv("DASHBOARD_CACHE_SECONDS", 10))
+
+# --- Email Validation Optimization ---
+# Disable SMTP probe on free tier (saves significant time)
+VALIDATE_WITH_SMTP_PROBE = not is_resource_constrained
+
 # --- Batch Sending (Pro Mode) ---
 BATCH_SIZE = 5          # Send 5 emails...
 BATCH_DELAY_MINUTES = 30 # Then wait 30 minutes
