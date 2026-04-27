@@ -32,6 +32,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 # Reduced timeout for resource-constrained environments
+is_resource_constrained = os.getenv("RESOURCE_CONSTRAINED", "false").lower() == "true"
 SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", 5 if is_resource_constrained else 12))
 SMTP_SSL_BYPASS_HOSTS = [
     host.strip().lower()

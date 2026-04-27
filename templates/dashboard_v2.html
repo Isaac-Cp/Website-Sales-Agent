@@ -1,0 +1,425 @@
+
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sales Agent Pro Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .chart-container { position: relative; height: 300px; width: 100%; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="h-full" x-data="dashboard()" x-init="init()">
+    <div class="min-h-full">
+        <!-- Navigation -->
+        <nav class="bg-slate-900 border-b border-slate-800">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between h-16">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 flex items-center gap-2">
+                            <div class="bg-indigo-600 p-1.5 rounded-lg">
+                                <i data-lucide="zap" class="w-6 h-6 text-white"></i>
+                            </div>
+                            <span class="text-white font-bold text-xl tracking-tight">SalesAgent<span class="text-indigo-400">Pro</span></span>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="hidden sm:flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700" role="status" aria-live="polite">
+                            <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse mr-2"></div>
+                            <span class="text-slate-300 text-xs font-medium uppercase tracking-wider">System Live</span>
+                        </div>
+                        <button @click="refreshData()" class="p-2 text-slate-400 hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-lg" aria-label="Refresh Dashboard Data">
+                            <i data-lucide="refresh-cw" class="w-5 h-5" :class="loading ? 'animate-spin' : ''"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <header class="bg-white shadow-sm border-b border-gray-200">
+            <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                    <h1 class="text-3xl font-extrabold text-gray-900 tracking-tight">Dashboard Overview</h1>
+                    <p class="mt-1 text-sm text-gray-500">Real-time insights into your automated outreach performance.</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button class="inline-flex items-center px-4 py-2 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200">
+                        <i data-lucide="plus" class="w-4 h-4 mr-2"></i>
+                        New Campaign
+                    </button>
+                    <button class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-all duration-200">
+                        <i data-lucide="settings" class="w-4 h-4 mr-2"></i>
+                        Settings
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+                <!-- Total Leads -->
+                <div class="bg-white overflow-hidden shadow-sm rounded-xl border border-gray-200 p-6 transition-all hover:shadow-md">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-lg bg-indigo-50 text-indigo-600">
+                            <i data-lucide="users" class="w-6 h-6"></i>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate uppercase tracking-wider">Total Leads</dt>
+                                <dd class="flex items-baseline">
+                                    <div class="text-2xl font-bold text-gray-900" x-text="stats.total_leads || 0">0</div>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sent Today -->
+                <div class="bg-white overflow-hidden shadow-sm rounded-xl border border-gray-200 p-6 transition-all hover:shadow-md">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-lg bg-blue-50 text-blue-600">
+                            <i data-lucide="mail" class="w-6 h-6"></i>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate uppercase tracking-wider">Sent Today</dt>
+                                <dd class="flex items-baseline">
+                                    <div class="text-2xl font-bold text-gray-900" x-text="stats.sent_today || 0">0</div>
+                                    <span class="ml-2 text-sm font-medium text-green-600">
+                                        <i data-lucide="trending-up" class="w-3 h-3 inline"></i>
+                                        12%
+                                    </span>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Replies -->
+                <div class="bg-white overflow-hidden shadow-sm rounded-xl border border-gray-200 p-6 transition-all hover:shadow-md">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-lg bg-green-50 text-green-600">
+                            <i data-lucide="message-square" class="w-6 h-6"></i>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate uppercase tracking-wider">Total Replies</dt>
+                                <dd class="flex items-baseline">
+                                    <div class="text-2xl font-bold text-gray-900" x-text="stats.total_replies || 0">0</div>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Success Rate -->
+                <div class="bg-white overflow-hidden shadow-sm rounded-xl border border-gray-200 p-6 transition-all hover:shadow-md">
+                    <div class="flex items-center">
+                        <div class="p-3 rounded-lg bg-amber-50 text-amber-600">
+                            <i data-lucide="target" class="w-6 h-6"></i>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate uppercase tracking-wider">Success Rate</dt>
+                                <dd class="flex items-baseline">
+                                    <div class="text-2xl font-bold text-gray-900" x-text="(stats.success_rate || 0) + '%'">0%</div>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Activity Chart -->
+                <div class="lg:col-span-2 bg-white shadow-sm rounded-xl border border-gray-200 p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-lg font-bold text-gray-900">Outreach Activity</h2>
+                        <select class="text-sm border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                            <option>Last 7 Days</option>
+                            <option>Last 30 Days</option>
+                        </select>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="outreachChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Funnel Visualization -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-200 p-6">
+                    <h2 class="text-lg font-bold text-gray-900 mb-6">Status Distribution</h2>
+                    <div class="chart-container" style="height: 200px;">
+                        <canvas id="statusChart"></canvas>
+                    </div>
+                    <div class="mt-8 space-y-4">
+                        <template x-for="(stage, index) in funnel" :key="index">
+                            <div>
+                                <div class="flex items-center justify-between text-sm mb-2">
+                                    <span class="font-medium text-gray-600 capitalize" x-text="stage.stage"></span>
+                                    <span class="font-bold text-gray-900" x-text="stage.count"></span>
+                                </div>
+                                <div class="w-full bg-gray-100 rounded-full h-2.5">
+                                    <div class="bg-indigo-600 h-2.5 rounded-full transition-all duration-1000" 
+                                         :style="`width: ${calculateFunnelWidth(stage.count)}%`"
+                                         x-init="$el.style.width = '0%'; setTimeout(() => $el.style.width = calculateFunnelWidth(stage.count) + '%', 100)"></div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    <div class="mt-8 p-4 bg-slate-50 rounded-lg border border-slate-100">
+                        <p class="text-xs text-slate-500 leading-relaxed italic">
+                            Funnel data is updated in real-time as leads progress through automated stages.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity Table -->
+            <div class="mt-8 bg-white shadow-sm rounded-xl border border-gray-200 overflow-hidden">
+                <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                    <h2 class="text-lg font-bold text-gray-900">Recent Activity</h2>
+                    <a href="#" class="text-sm font-medium text-indigo-600 hover:text-indigo-500">View all</a>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Business</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Event Type</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Timestamp</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            <template x-for="item in activity" :key="item.id">
+                                <tr class="hover:bg-gray-50 transition-colors">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm font-bold text-gray-900" x-text="item.business_name"></div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold capitalize"
+                                                  :class="getEventClass(item.type)"
+                                                  x-text="item.type"></span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="formatDate(item.timestamp)"></td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="text-xs font-medium text-green-600 bg-green-50 px-2 py-1 rounded">Success</span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Real-time Logs -->
+            <div class="mt-8 bg-slate-900 shadow-xl rounded-xl border border-slate-800 overflow-hidden">
+                <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                    <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                        <i data-lucide="terminal" class="w-5 h-5 text-indigo-400"></i>
+                        Live System Logs
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-slate-400 font-mono" x-text="wsStatus">Connecting...</span>
+                        <div class="w-2 h-2 rounded-full" :class="wsConnected ? 'bg-green-500' : 'bg-red-500'"></div>
+                    </div>
+                </div>
+                <div class="p-4 bg-slate-950 font-mono text-xs text-indigo-300 h-64 overflow-y-auto scrollbar-hide flex flex-col-reverse" id="logContainer">
+                    <template x-for="(log, index) in logs" :key="index">
+                        <div class="py-0.5 border-l-2 border-indigo-900 pl-3 mb-1 hover:bg-slate-900 transition-colors">
+                            <span class="text-slate-500 mr-2" x-text="formatLogTime(log.ts)"></span>
+                            <span x-text="log.msg"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="bg-white border-t border-gray-200 mt-12">
+            <div class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8 text-center">
+                <p class="text-sm text-gray-400">&copy; 2024 SalesAgent Pro. All rights reserved. Modular Architecture v2.0</p>
+            </div>
+        </footer>
+    </div>
+
+    <script>
+        function dashboard() {
+            return {
+                stats: {},
+                activity: [],
+                funnel: [],
+                dailyVolume: [],
+                logs: [],
+                wsConnected: false,
+                wsStatus: 'Disconnected',
+                loading: false,
+                chart: null,
+                statusChart: null,
+
+                async init() {
+                    lucide.createIcons();
+                    await this.refreshData();
+                    this.initCharts();
+                    this.initWebSocket();
+                },
+
+                initWebSocket() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+                    const socket = new WebSocket(wsUrl);
+
+                    socket.onopen = () => {
+                        this.wsConnected = true;
+                        this.wsStatus = 'Connected';
+                    };
+
+                    socket.onmessage = (event) => {
+                        const msg = event.data;
+                        this.logs.unshift({
+                            ts: new Date().toISOString(),
+                            msg: msg
+                        });
+                        if (this.logs.length > 100) this.logs.pop();
+                    };
+
+                    socket.onclose = () => {
+                        this.wsConnected = false;
+                        this.wsStatus = 'Disconnected (Retrying...)';
+                        setTimeout(() => this.initWebSocket(), 5000);
+                    };
+                },
+
+                formatLogTime(ts) {
+                    return new Date(ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
+
+                async refreshData() {
+                    this.loading = true;
+                    try {
+                        const response = await fetch('/api/v2/dashboard', {
+                            headers: {
+                                'X-API-Key': 'sales-agent-pro-2024' // Default for now, should be configurable
+                            }
+                        });
+                        const data = await response.json();
+                        this.stats = data.stats;
+                        this.activity = data.activity;
+                        this.funnel = data.funnel;
+                        this.dailyVolume = data.daily_volume;
+                        
+                        if (this.chart && this.statusChart) {
+                            this.updateCharts();
+                        }
+                    } catch (error) {
+                        console.error('Error fetching dashboard data:', error);
+                    } finally {
+                        this.loading = false;
+                        this.$nextTick(() => lucide.createIcons());
+                    }
+                },
+
+                calculateFunnelWidth(count) {
+                    const max = Math.max(...this.funnel.map(f => f.count), 1);
+                    return (count / max) * 100;
+                },
+
+                getEventClass(type) {
+                    const classes = {
+                        'sent': 'bg-blue-100 text-blue-800',
+                        'reply': 'bg-green-100 text-green-800',
+                        'click': 'bg-purple-100 text-purple-800',
+                        'bounce': 'bg-red-100 text-red-800'
+                    };
+                    return classes[type] || 'bg-gray-100 text-gray-800';
+                },
+
+                formatDate(ts) {
+                    if (!ts) return '--';
+                    const date = new Date(ts);
+                    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                },
+
+                initCharts() {
+                    const ctxOutreach = document.getElementById('outreachChart').getContext('2d');
+                    this.chart = new Chart(ctxOutreach, {
+                        type: 'line',
+                        data: {
+                            labels: this.dailyVolume.map(d => d.date),
+                            datasets: [{
+                                label: 'Emails Sent',
+                                data: this.dailyVolume.map(d => d.sent),
+                                borderColor: 'rgb(79, 70, 229)',
+                                backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                                borderWidth: 3,
+                                fill: true,
+                                tension: 0.4,
+                                pointRadius: 4,
+                                pointBackgroundColor: 'rgb(79, 70, 229)'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, grid: { borderDash: [2, 4] } },
+                                x: { grid: { display: false } }
+                            }
+                        }
+                    });
+
+                    const ctxStatus = document.getElementById('statusChart').getContext('2d');
+                    this.statusChart = new Chart(ctxStatus, {
+                        type: 'doughnut',
+                        data: {
+                            labels: this.funnel.map(f => f.stage),
+                            datasets: [{
+                                data: this.funnel.map(f => f.count),
+                                backgroundColor: [
+                                    '#4f46e5', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1'
+                                ],
+                                borderWeight: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '70%',
+                            plugins: {
+                                legend: { display: false }
+                            }
+                        }
+                    });
+                },
+
+                updateCharts() {
+                    this.chart.data.labels = this.dailyVolume.map(d => d.date);
+                    this.chart.data.datasets[0].data = this.dailyVolume.map(d => d.sent);
+                    this.chart.update();
+
+                    this.statusChart.data.labels = this.funnel.map(f => f.stage);
+                    this.statusChart.data.datasets[0].data = this.funnel.map(f => f.count);
+                    this.statusChart.update();
+                }
+            }
+        }
+    </script>
+</body>
+</html>

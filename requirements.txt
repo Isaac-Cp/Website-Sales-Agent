@@ -22,3 +22,4 @@ proxycurl-py[asyncio]
 gunicorn
 uvicorn
 psycopg2-binary
+jinja2

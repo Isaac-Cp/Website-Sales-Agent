@@ -25,7 +25,6 @@ from utils import canonicalize_website, pagespeed
 from core.pipeline import run_pipeline
 from bot_manager import BotManager
 from dashboard_data import build_dashboard_payload, get_dashboard_lead_detail
-from web_ui import render_dashboard_shell
 try:
     from langchain_groq import ChatGroq
 except ImportError:
@@ -533,8 +532,39 @@ if FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def homepage():
-        """Dashboard home for the web deployment."""
-        return HTMLResponse(render_dashboard_shell())
+        """New modular dashboard v2.0."""
+        from fastapi.templating import Jinja2Templates
+        templates = Jinja2Templates(directory="templates")
+        return templates.TemplateResponse("dashboard_v2.html", {"request": {}})
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard_v2():
+        from fastapi.templating import Jinja2Templates
+        templates = Jinja2Templates(directory="templates")
+        return templates.TemplateResponse("dashboard_v2.html", {"request": {}})
+
+    from fastapi.security import APIKeyHeader
+    from fastapi import Security, Depends
+
+    API_KEY_NAME = "X-API-Key"
+    api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+    def get_api_key(api_key: str = Security(api_key_header)):
+        if api_key == getattr(config, "DASHBOARD_API_KEY", "sales-agent-pro-2024"):
+            return api_key
+        raise HTTPException(status_code=403, detail="Could not validate credentials")
+
+    @app.get("/api/v2/dashboard", dependencies=[Depends(get_api_key)])
+    def dashboard_data_v2():
+        from dashboard_service import DashboardService
+        dm = DataManager()
+        service = DashboardService(dm)
+        return {
+            "stats": service.get_stats_overview(),
+            "activity": service.get_recent_activity(),
+            "funnel": service.get_lead_funnel(),
+            "daily_volume": service.get_daily_volume()
+        }
 
     @app.get("/health")
     def health_check():
