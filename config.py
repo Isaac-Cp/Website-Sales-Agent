@@ -31,7 +31,8 @@ SMTP_EMAIL = os.getenv("SMTP_EMAIL")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", 12))
+# Reduced timeout for resource-constrained environments
+SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", 5 if is_resource_constrained else 12))
 SMTP_SSL_BYPASS_HOSTS = [
     host.strip().lower()
     for host in os.getenv("SMTP_SSL_BYPASS_HOSTS", "").split(",")
@@ -107,10 +108,22 @@ DRY_RUN = False  # Emails will be sent if in window
 ALLOW_RISKY_EMAILS = os.getenv("ALLOW_RISKY_EMAILS", "False").lower() == "true"
 HEADLESS = True  # Headless for reliability in automated runs
 LOG_FILE = "activity.log"
-SESSION_QUERIES = 20
-PARALLEL_WORKERS = 6
+
+# Auto-detect resource constraints (free tier vs paid)
+is_free_tier = os.getenv("DYNO") is None and os.getenv("PORT") and not os.getenv("RENDER_INSTANCE_ID")
+is_resource_constrained = is_free_tier or os.getenv("RESOURCE_CONSTRAINED", "False").lower() == "true"
+
+# Adjust for low-resource environments
+if is_resource_constrained:
+    SESSION_QUERIES = int(os.getenv("SESSION_QUERIES", 5))      # Reduce from 20
+    PARALLEL_WORKERS = int(os.getenv("PARALLEL_WORKERS", 2))    # Reduce from 6
+    BATCH_SIZE = int(os.getenv("BATCH_SIZE", 5))                # Reduce from 100
+else:
+    SESSION_QUERIES = int(os.getenv("SESSION_QUERIES", 20))
+    PARALLEL_WORKERS = int(os.getenv("PARALLEL_WORKERS", 6))
+    BATCH_SIZE = int(os.getenv("BATCH_SIZE", 100))
+
 SKIP_JITTER = True
-BATCH_SIZE = 100
 BATCH_DELAY_MINUTES = 1
 FASTAPI_PORT = int(os.getenv("PORT", os.getenv("FASTAPI_PORT", 8000)))
 DATABASE_URL = os.getenv("DATABASE_URL")
