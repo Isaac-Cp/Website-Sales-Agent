@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-200">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SalesAgent Pro | Next-Gen Outreach</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                            950: '#082f49',
+                        },
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .glass {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glass-hover:hover {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .chart-container { position: relative; height: 320px; width: 100%; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+        .animate-gradient {
+            background-size: 200% 200%;
+            animation: gradient 8s ease infinite;
+        }
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+    </style>
+</head>
+<body class="h-full font-sans antialiased overflow-hidden" x-data="dashboard()" x-init="init()">
+    
+    <!-- App Container -->
+    <div class="flex h-full overflow-hidden">
+        
+        <!-- Sidebar -->
+        <aside class="hidden lg:flex lg:flex-shrink-0 flex-col w-64 glass border-r border-slate-800 transition-all duration-300">
+            <div class="flex flex-col h-full">
+                <!-- Sidebar Header -->
+                <div class="flex items-center h-20 px-6 gap-3 border-b border-slate-800/50">
+                    <div class="bg-brand-500 p-2 rounded-xl shadow-lg shadow-brand-500/20">
+                        <i data-lucide="zap" class="w-6 h-6 text-white"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-extrabold tracking-tight text-white leading-none">SalesAgent</h1>
+                        <p class="text-[10px] font-bold text-brand-400 uppercase tracking-widest mt-1">PRO EDITION</p>
+                    </div>
+                </div>
+
+                <!-- Navigation Links -->
+                <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+                    <template x-for="item in navItems" :key="item.id">
+                        <button @click="currentTab = item.id" 
+                                :class="currentTab === item.id ? 'bg-brand-500/10 text-brand-400 border-brand-500/50' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 border-transparent'"
+                                class="flex items-center w-full px-4 py-3 text-sm font-semibold rounded-xl border transition-all duration-200 group">
+                            <i :data-lucide="item.icon" class="w-5 h-5 mr-3 transition-transform group-hover:scale-110"></i>
+                            <span x-text="item.label"></span>
+                            <span x-show="item.badge" x-text="item.badge" class="ml-auto bg-brand-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold"></span>
+                        </button>
+                    </template>
+                </nav>
+
+                <!-- Sidebar Footer -->
+                <div class="p-4 border-t border-slate-800/50">
+                    <div class="glass rounded-2xl p-4 space-y-3">
+                        <div class="flex items-center justify-between text-xs">
+                            <span class="text-slate-400 font-medium">Daily Quota</span>
+                            <span class="text-white font-bold" x-text="`${stats.sent_today || 0} / 25`">0 / 25</span>
+                        </div>
+                        <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                            <div class="bg-brand-500 h-full rounded-full transition-all duration-1000" :style="`width: ${(stats.sent_today / 25) * 100}%`"></div>
+                        </div>
+                        <p class="text-[10px] text-slate-500 text-center leading-relaxed">
+                            Resets in <span class="text-slate-300 font-bold">4h 12m</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col min-w-0 bg-slate-950 relative overflow-hidden">
+            <!-- Background Decorative Blobs -->
+            <div class="absolute top-0 right-0 -mr-20 -mt-20 w-96 h-96 bg-brand-500/10 rounded-full blur-[120px] pointer-events-none"></div>
+            <div class="absolute bottom-0 left-0 -ml-20 -mb-20 w-96 h-96 bg-indigo-500/10 rounded-full blur-[120px] pointer-events-none"></div>
+
+            <!-- Header -->
+            <header class="h-20 flex-shrink-0 glass flex items-center justify-between px-6 lg:px-10 z-10 border-b border-slate-800/50">
+                <div class="flex items-center lg:hidden gap-3">
+                    <div class="bg-brand-500 p-1.5 rounded-lg">
+                        <i data-lucide="zap" class="w-5 h-5 text-white"></i>
+                    </div>
+                    <span class="text-white font-bold text-lg tracking-tight">SalesAgent</span>
+                </div>
+                
+                <div class="hidden lg:block">
+                    <h2 class="text-lg font-bold text-white tracking-tight" x-text="getCurrentTabLabel()"></h2>
+                    <p class="text-xs text-slate-500 font-medium mt-0.5">Welcome back, Promise. Agent is currently <span class="text-green-500 font-bold">Running</span>.</p>
+                </div>
+
+                <div class="flex items-center gap-3 lg:gap-5">
+                    <!-- Status Indicator -->
+                    <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-slate-900/50 border border-slate-800 rounded-full">
+                        <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                        <span class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">System Live</span>
+                    </div>
+
+                    <!-- Refresh Button -->
+                    <button @click="refreshData()" class="p-2.5 glass-hover rounded-xl text-slate-400 hover:text-white transition-all group focus:outline-none focus:ring-2 focus:ring-brand-500/50">
+                        <i data-lucide="refresh-cw" class="w-5 h-5" :class="loading ? 'animate-spin' : 'group-hover:rotate-12'"></i>
+                    </button>
+
+                    <!-- Export Dropdown -->
+                    <div class="relative" x-data="{ open: false }">
+                        <button @click="open = !open" class="flex items-center gap-2 px-4 py-2.5 glass-hover rounded-xl text-slate-400 hover:text-white transition-all font-bold text-xs border border-slate-800">
+                            <i data-lucide="download" class="w-4 h-4"></i>
+                            <span>Export</span>
+                        </button>
+                        <div x-show="open" @click.away="open = false" x-cloak class="absolute right-0 mt-2 w-48 glass rounded-2xl shadow-2xl border border-slate-800 py-2 z-50">
+                            <a href="/api/v2/export/leads?format=csv" class="flex items-center gap-3 px-4 py-2 text-sm text-slate-300 hover:bg-brand-500/10 hover:text-brand-400 transition-colors">
+                                <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
+                                <span>Export as CSV</span>
+                            </a>
+                            <a href="/api/v2/export/leads?format=json" class="flex items-center gap-3 px-4 py-2 text-sm text-slate-300 hover:bg-brand-500/10 hover:text-brand-400 transition-colors">
+                                <i data-lucide="file-json" class="w-4 h-4"></i>
+                                <span>Export as JSON</span>
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Profile -->
+                    <div class="flex items-center gap-3 pl-4 border-l border-slate-800">
+                        <div class="hidden sm:block text-right">
+                            <p class="text-sm font-bold text-white leading-none">Promise</p>
+                            <p class="text-[10px] font-medium text-slate-500 mt-1 uppercase tracking-wider">Administrator</p>
+                        </div>
+                        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-400 to-indigo-600 flex items-center justify-center font-bold text-white shadow-lg">P</div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Scrollable Content -->
+            <div class="flex-1 overflow-y-auto p-6 lg:p-10 space-y-10 z-0 scrollbar-hide">
+                
+                <!-- Overview Tab -->
+                <div x-show="currentTab === 'dashboard'" x-cloak class="space-y-10">
+                    <!-- Bot Controls -->
+                    <div class="glass p-6 rounded-[2rem] flex flex-wrap items-center justify-between gap-6">
+                        <div class="flex items-center gap-4">
+                            <div class="p-3 bg-brand-500/10 text-brand-400 rounded-2xl">
+                                <i data-lucide="bot" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-sm font-bold text-white uppercase tracking-wider">Agent Controller</h3>
+                                <div class="flex items-center gap-2 mt-1">
+                                    <span class="text-[10px] font-bold text-slate-500">Status:</span>
+                                    <span class="text-[10px] font-black uppercase tracking-widest" :class="botStatus.status === 'running' ? 'text-green-500' : 'text-amber-500'" x-text="botStatus.status || 'Unknown'"></span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button @click="controlBot('run-now')" :disabled="actionLoading" class="px-6 py-2.5 bg-brand-500 text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-500/20 hover:bg-brand-600 transition-all disabled:opacity-50">
+                                Run Now
+                            </button>
+                            <button @click="controlBot('pause')" x-show="botStatus.status === 'running'" :disabled="actionLoading" class="px-6 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-700 transition-all disabled:opacity-50">
+                                Pause
+                            </button>
+                            <button @click="controlBot('resume')" x-show="botStatus.status !== 'running'" :disabled="actionLoading" class="px-6 py-2.5 bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 transition-all disabled:opacity-50">
+                                Resume
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Stats Grid -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <template x-for="stat in statCards" :key="stat.label">
+                            <div class="glass p-6 rounded-[2rem] space-y-4 transition-all hover:translate-y-[-4px] hover:shadow-2xl hover:shadow-brand-500/10 group">
+                                <div class="flex items-center justify-between">
+                                    <div :class="`p-3 rounded-2xl ${stat.bg} ${stat.color} shadow-lg shadow-current/10`">
+                                        <i :data-lucide="stat.icon" class="w-6 h-6"></i>
+                                    </div>
+                                    <div x-show="stat.trend" class="flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-green-500/10 text-green-500">
+                                        <i data-lucide="trending-up" class="w-3 h-3"></i>
+                                        <span x-text="stat.trend"></span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <p class="text-xs font-bold text-slate-500 uppercase tracking-widest" x-text="stat.label"></p>
+                                    <h3 class="text-3xl font-extrabold text-white mt-1 tracking-tight" x-text="stat.value"></h3>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <!-- Main Charts Row -->
+                    <div class="grid grid-cols-1 xl:grid-cols-3 gap-8">
+                        <!-- Activity Line Chart -->
+                        <div class="xl:col-span-2 glass p-8 rounded-[2.5rem] space-y-8">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h3 class="text-xl font-extrabold text-white tracking-tight">Outreach Performance</h3>
+                                    <p class="text-sm text-slate-500 font-medium mt-1">Activity metrics over the last 7 days.</p>
+                                </div>
+                                <div class="flex bg-slate-900/50 p-1 rounded-xl border border-slate-800">
+                                    <button class="px-4 py-1.5 rounded-lg text-xs font-bold bg-brand-500 text-white shadow-lg shadow-brand-500/20">Sent</button>
+                                    <button class="px-4 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-slate-200 transition-colors">Replies</button>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="outreachChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Funnel Card -->
+                        <div class="glass p-8 rounded-[2.5rem] space-y-8">
+                            <div>
+                                <h3 class="text-xl font-extrabold text-white tracking-tight">Conversion Funnel</h3>
+                                <p class="text-sm text-slate-500 font-medium mt-1">Lead progression distribution.</p>
+                            </div>
+                            
+                            <div class="relative flex justify-center py-4">
+                                <div class="chart-container" style="height: 220px; width: 220px;">
+                                    <canvas id="funnelChart"></canvas>
+                                </div>
+                                <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                    <span class="text-3xl font-black text-white" x-text="stats.success_rate + '%'">0%</span>
+                                    <span class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Success</span>
+                                </div>
+                            </div>
+
+                            <div class="space-y-4">
+                                <template x-for="stage in funnel" :key="stage.stage">
+                                    <div class="space-y-2">
+                                        <div class="flex items-center justify-between text-xs font-bold">
+                                            <span class="text-slate-400 uppercase tracking-widest" x-text="stage.stage"></span>
+                                            <span class="text-white" x-text="stage.count"></span>
+                                        </div>
+                                        <div class="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                                            <div class="bg-brand-500 h-full rounded-full transition-all duration-1000" :style="`width: ${calculateFunnelWidth(stage.count)}%`"></div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bottom Row: Logs and Activity -->
+                    <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                        <!-- Recent Activity -->
+                        <div class="glass rounded-[2.5rem] overflow-hidden flex flex-col">
+                            <div class="p-8 pb-4 border-b border-slate-800/50 flex items-center justify-between">
+                                <h3 class="text-xl font-extrabold text-white tracking-tight">Recent Activity</h3>
+                                <button class="text-xs font-bold text-brand-400 hover:text-brand-300 transition-colors">View All Leads</button>
+                            </div>
+                            <div class="flex-1 overflow-x-auto">
+                                <table class="w-full text-left border-collapse">
+                                    <thead class="bg-slate-900/30">
+                                        <tr>
+                                            <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Name</th>
+                                            <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Event</th>
+                                            <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Time</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-800/50">
+                                        <template x-for="item in activity" :key="item.id">
+                                            <tr class="group hover:bg-slate-800/30 transition-colors cursor-pointer">
+                                                <td class="px-8 py-5">
+                                                    <div class="text-sm font-bold text-white group-hover:text-brand-400 transition-colors" x-text="item.business_name"></div>
+                                                    <div class="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-widest" x-text="item.niche || 'Local Business'"></div>
+                                                </td>
+                                                <td class="px-8 py-5">
+                                                    <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest"
+                                                          :class="getEventClass(item.type)"
+                                                          x-text="item.type"></span>
+                                                </td>
+                                                <td class="px-8 py-5 text-right">
+                                                    <div class="text-xs font-bold text-slate-400" x-text="formatDate(item.timestamp)"></div>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Live Logs -->
+                        <div class="glass rounded-[2.5rem] flex flex-col h-[500px]">
+                            <div class="p-8 pb-4 border-b border-slate-800/50 flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <div class="p-2 bg-brand-500/10 text-brand-400 rounded-lg">
+                                        <i data-lucide="terminal" class="w-5 h-5"></i>
+                                    </div>
+                                    <h3 class="text-xl font-extrabold text-white tracking-tight">System Terminal</h3>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[10px] font-bold text-slate-500 font-mono" x-text="wsStatus"></span>
+                                    <div class="w-2 h-2 rounded-full" :class="wsConnected ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'"></div>
+                                </div>
+                            </div>
+                            <div class="flex-1 p-6 bg-slate-950/50 font-mono text-[11px] leading-relaxed overflow-y-auto scrollbar-hide flex flex-col-reverse" id="logContainer">
+                                <template x-for="(log, index) in logs" :key="index">
+                                    <div class="py-1.5 border-l-2 border-slate-800 pl-4 mb-2 hover:bg-slate-900/50 transition-colors rounded-r-lg group">
+                                        <span class="text-brand-500/50 font-bold group-hover:text-brand-400 transition-colors" x-text="formatLogTime(log.ts)"></span>
+                                        <span class="text-slate-400 ml-3" x-text="log.msg"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Leads Tab -->
+                <div x-show="currentTab === 'leads'" x-cloak class="space-y-8">
+                    <div class="glass rounded-[2.5rem] overflow-hidden flex flex-col">
+                        <div class="p-8 border-b border-slate-800/50 flex flex-wrap items-center justify-between gap-6">
+                            <div>
+                                <h3 class="text-2xl font-black text-white tracking-tight">Leads Database</h3>
+                                <p class="text-slate-500 font-medium mt-1">Full list of all scraped and processed leads.</p>
+                            </div>
+                            <div class="flex items-center gap-4">
+                                <div class="relative">
+                                    <i data-lucide="search" class="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"></i>
+                                    <input type="text" x-model="searchQuery" placeholder="Search leads..." class="bg-slate-900 border border-slate-800 rounded-xl pl-11 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 text-slate-200 w-64">
+                                </div>
+                                <select x-model="statusFilter" class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 text-slate-200">
+                                    <option value="">All Statuses</option>
+                                    <option value="scraped">Scraped</option>
+                                    <option value="emailed">Emailed</option>
+                                    <option value="interested">Interested</option>
+                                    <option value="followup_1">Followup 1</option>
+                                    <option value="bounced">Bounced</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead class="bg-slate-900/30">
+                                    <tr>
+                                        <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Business Name</th>
+                                        <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Contact</th>
+                                        <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Status</th>
+                                        <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Added</th>
+                                        <th class="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-800/50">
+                                    <template x-for="lead in filteredLeads" :key="lead.id">
+                                        <tr class="group hover:bg-slate-800/30 transition-colors">
+                                            <td class="px-8 py-5">
+                                                <div class="text-sm font-bold text-white" x-text="lead.business_name"></div>
+                                                <div class="text-[10px] text-slate-500 mt-1 truncate max-w-xs" x-text="lead.website || 'No website'"></div>
+                                            </td>
+                                            <td class="px-8 py-5">
+                                                <div class="text-xs text-slate-300 font-medium" x-text="lead.email || 'No email'"></div>
+                                                <div class="text-[10px] text-slate-500 mt-1" x-text="lead.phone || 'No phone'"></div>
+                                            </td>
+                                            <td class="px-8 py-5">
+                                                <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest"
+                                                      :class="getEventClass(lead.status)"
+                                                      x-text="lead.status || 'scraped'"></span>
+                                            </td>
+                                            <td class="px-8 py-5">
+                                                <div class="text-xs text-slate-400" x-text="formatDate(lead.created_at)"></div>
+                                            </td>
+                                            <td class="px-8 py-5 text-right">
+                                                <button class="p-2 glass-hover rounded-lg text-slate-400 hover:text-white transition-colors">
+                                                    <i data-lucide="external-link" class="w-4 h-4"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                        <!-- Pagination -->
+                        <div class="p-8 border-t border-slate-800/50 flex items-center justify-between">
+                            <span class="text-xs text-slate-500 font-medium" x-text="`Showing ${filteredLeads.length} leads`"></span>
+                            <div class="flex gap-2">
+                                <button class="p-2 glass-hover rounded-lg text-slate-500 hover:text-white disabled:opacity-30" disabled>
+                                    <i data-lucide="chevron-left" class="w-5 h-5"></i>
+                                </button>
+                                <button class="p-2 glass-hover rounded-lg text-slate-500 hover:text-white disabled:opacity-30" disabled>
+                                    <i data-lucide="chevron-right" class="w-5 h-5"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function dashboard() {
+            return {
+                currentTab: 'dashboard',
+                navItems: [
+                    { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+                    { id: 'leads', label: 'Leads', icon: 'users', badge: '82' },
+                    { id: 'analytics', label: 'Analytics', icon: 'bar-chart-3' },
+                    { id: 'automation', label: 'Automation', icon: 'bot' },
+                    { id: 'settings', label: 'Settings', icon: 'settings' },
+                ],
+                statCards: [
+                    { label: 'Total Leads', value: '0', icon: 'users', bg: 'bg-brand-500/10', color: 'text-brand-500', trend: '+14%' },
+                    { label: 'Sent Today', value: '0', icon: 'send', bg: 'bg-indigo-500/10', color: 'text-indigo-500', trend: '+8%' },
+                    { label: 'Total Replies', value: '0', icon: 'message-circle', bg: 'bg-emerald-500/10', color: 'text-emerald-500' },
+                    { label: 'Avg Success', value: '0%', icon: 'target', bg: 'bg-amber-500/10', color: 'text-amber-500' },
+                ],
+                stats: {},
+                activity: [],
+                funnel: [],
+                dailyVolume: [],
+                logs: [],
+                leads: [],
+                searchQuery: '',
+                statusFilter: '',
+                botStatus: {},
+                wsConnected: false,
+                wsStatus: 'Disconnected',
+                loading: false,
+                actionLoading: false,
+                outreachChart: null,
+                funnelChart: null,
+
+                async init() {
+                    lucide.createIcons();
+                    await this.refreshData();
+                    await this.fetchLeads();
+                    await this.fetchBotStatus();
+                    this.initCharts();
+                    this.initWebSocket();
+                    
+                    // Auto-refresh bot status
+                    setInterval(() => this.fetchBotStatus(), 5000);
+                    
+                    // Update stats value mapping
+                    this.$watch('stats', (val) => {
+                        this.statCards[0].value = val.total_leads || '0';
+                        this.statCards[1].value = val.sent_today || '0';
+                        this.statCards[2].value = val.total_replies || '0';
+                        this.statCards[3].value = (val.success_rate || '0') + '%';
+                    });
+                },
+
+                get filteredLeads() {
+                    return this.leads.filter(l => {
+                        const matchesSearch = !this.searchQuery || 
+                            l.business_name.toLowerCase().includes(this.searchQuery.toLowerCase()) ||
+                            (l.email && l.email.toLowerCase().includes(this.searchQuery.toLowerCase()));
+                        const matchesStatus = !this.statusFilter || l.status === this.statusFilter;
+                        return matchesSearch && matchesStatus;
+                    });
+                },
+
+                getCurrentTabLabel() {
+                    return this.navItems.find(i => i.id === this.currentTab)?.label || 'Dashboard';
+                },
+
+                initWebSocket() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+                    const socket = new WebSocket(wsUrl);
+
+                    socket.onopen = () => {
+                        this.wsConnected = true;
+                        this.wsStatus = 'Live Connection';
+                    };
+
+                    socket.onmessage = (event) => {
+                        const msg = event.data;
+                        if (msg.startsWith('tick:')) return; // Ignore ticks for visual log
+                        this.logs.unshift({
+                            ts: new Date().toISOString(),
+                            msg: msg
+                        });
+                        if (this.logs.length > 100) this.logs.pop();
+                    };
+
+                    socket.onclose = () => {
+                        this.wsConnected = false;
+                        this.wsStatus = 'Reconnecting...';
+                        setTimeout(() => this.initWebSocket(), 5000);
+                    };
+                },
+
+                formatLogTime(ts) {
+                    return new Date(ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
+
+                async refreshData() {
+                    this.loading = true;
+                    try {
+                        const response = await fetch('/api/v2/dashboard', {
+                            headers: { 'X-API-Key': 'sales-agent-pro-2024' }
+                        });
+                        const data = await response.json();
+                        this.stats = data.stats;
+                        this.activity = data.activity;
+                        this.funnel = data.funnel;
+                        this.dailyVolume = data.daily_volume;
+                        
+                        if (this.outreachChart && this.funnelChart) {
+                            this.updateCharts();
+                        }
+                    } catch (error) {
+                        console.error('Error fetching dashboard data:', error);
+                    } finally {
+                        this.loading = false;
+                        this.$nextTick(() => lucide.createIcons());
+                    }
+                },
+
+                async fetchLeads() {
+                    try {
+                        const response = await fetch('/api/v2/leads', {
+                            headers: { 'X-API-Key': 'sales-agent-pro-2024' }
+                        });
+                        this.leads = await response.json();
+                    } catch (error) {
+                        console.error('Error fetching leads:', error);
+                    }
+                },
+
+                async fetchBotStatus() {
+                    try {
+                        const response = await fetch('/api/bot/status');
+                        this.botStatus = await response.json();
+                    } catch (error) {
+                        console.error('Error fetching bot status:', error);
+                    }
+                },
+
+                async controlBot(action) {
+                    this.actionLoading = true;
+                    try {
+                        const response = await fetch(`/api/bot/${action}`, { method: 'POST' });
+                        const result = await response.json();
+                        await this.fetchBotStatus();
+                        // Optional: Add a toast notification here
+                    } catch (error) {
+                        console.error(`Error performing bot action ${action}:`, error);
+                    } finally {
+                        this.actionLoading = false;
+                    }
+                },
+
+                calculateFunnelWidth(count) {
+                    const max = Math.max(...this.funnel.map(f => f.count), 1);
+                    return (count / max) * 100;
+                },
+
+                getEventClass(type) {
+                    const x = String(type || '').toLowerCase();
+                    if (['sent', 'emailed'].includes(x)) return 'bg-brand-500/10 text-brand-400';
+                    if (['reply', 'opened'].includes(x)) return 'bg-emerald-500/10 text-emerald-400';
+                    if (['bounce', 'failed'].includes(x)) return 'bg-rose-500/10 text-rose-400';
+                    return 'bg-slate-800 text-slate-400';
+                },
+
+                formatDate(ts) {
+                    if (!ts) return '--';
+                    const date = new Date(ts);
+                    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                },
+
+                initCharts() {
+                    const ctxOutreach = document.getElementById('outreachChart').getContext('2d');
+                    
+                    // Create gradient for the line chart
+                    const gradient = ctxOutreach.createLinearGradient(0, 0, 0, 400);
+                    gradient.addColorStop(0, 'rgba(14, 165, 233, 0.4)');
+                    gradient.addColorStop(1, 'rgba(14, 165, 233, 0)');
+
+                    this.outreachChart = new Chart(ctxOutreach, {
+                        type: 'line',
+                        data: {
+                            labels: this.dailyVolume.map(d => d.date),
+                            datasets: [{
+                                label: 'Emails Sent',
+                                data: this.dailyVolume.map(d => d.sent),
+                                borderColor: '#0ea5e9',
+                                backgroundColor: gradient,
+                                borderWidth: 4,
+                                fill: true,
+                                tension: 0.4,
+                                pointRadius: 0,
+                                pointHoverRadius: 6,
+                                pointHoverBackgroundColor: '#0ea5e9',
+                                pointHoverBorderColor: '#fff',
+                                pointHoverBorderWidth: 3,
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    backgroundColor: '#0f172a',
+                                    titleFont: { size: 13, weight: 'bold' },
+                                    bodyFont: { size: 12 },
+                                    padding: 12,
+                                    cornerRadius: 12,
+                                    displayColors: false,
+                                    borderWidth: 1,
+                                    borderColor: 'rgba(255,255,255,0.1)'
+                                }
+                            },
+                            scales: {
+                                y: { 
+                                    beginAtZero: true, 
+                                    grid: { color: 'rgba(255, 255, 255, 0.05)', drawBorder: false },
+                                    ticks: { color: '#64748b', font: { weight: 'bold', size: 11 } }
+                                },
+                                x: { 
+                                    grid: { display: false },
+                                    ticks: { color: '#64748b', font: { weight: 'bold', size: 11 } }
+                                }
+                            }
+                        }
+                    });
+
+                    const ctxFunnel = document.getElementById('funnelChart').getContext('2d');
+                    this.funnelChart = new Chart(ctxFunnel, {
+                        type: 'doughnut',
+                        data: {
+                            labels: this.funnel.map(f => f.stage),
+                            datasets: [{
+                                data: this.funnel.map(f => f.count),
+                                backgroundColor: [
+                                    '#0ea5e9', '#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'
+                                ],
+                                borderWeight: 0,
+                                borderRadius: 10,
+                                spacing: 5
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '82%',
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: { enabled: true }
+                            }
+                        }
+                    });
+                },
+
+                updateCharts() {
+                    this.outreachChart.data.labels = this.dailyVolume.map(d => d.date);
+                    this.outreachChart.data.datasets[0].data = this.dailyVolume.map(d => d.sent);
+                    this.outreachChart.update();
+
+                    this.funnelChart.data.labels = this.funnel.map(f => f.stage);
+                    this.funnelChart.data.datasets[0].data = this.funnel.map(f => f.count);
+                    this.funnelChart.update();
+                }
+            }
+        }
+    </script>
+</body>
+</html>

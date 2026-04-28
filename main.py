@@ -532,13 +532,19 @@ if FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def homepage():
-        """New modular dashboard v2.0."""
+        """New modular dashboard v3.0 (Sleek Dark Mode)."""
         from fastapi.templating import Jinja2Templates
         templates = Jinja2Templates(directory="templates")
-        return templates.TemplateResponse("dashboard_v2.html", {"request": {}})
+        return templates.TemplateResponse("dashboard_v3.html", {"request": {}})
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard_v2():
+    @app.get("/v3", response_class=HTMLResponse)
+    def dashboard_v3():
+        from fastapi.templating import Jinja2Templates
+        templates = Jinja2Templates(directory="templates")
+        return templates.TemplateResponse("dashboard_v3.html", {"request": {}})
+
+    @app.get("/v2", response_class=HTMLResponse)
+    def dashboard_v2_legacy():
         from fastapi.templating import Jinja2Templates
         templates = Jinja2Templates(directory="templates")
         return templates.TemplateResponse("dashboard_v2.html", {"request": {}})
@@ -565,6 +571,41 @@ if FastAPI:
             "funnel": service.get_lead_funnel(),
             "daily_volume": service.get_daily_volume()
         }
+
+    @app.get("/api/v2/leads", dependencies=[Depends(get_api_key)])
+    def leads_list_v2(status: str = None, limit: int = 50, offset: int = 0):
+        from dashboard_service import DashboardService
+        dm = DataManager()
+        service = DashboardService(dm)
+        return service.get_leads_list(limit=limit, offset=offset, status=status)
+
+    @app.get("/api/v2/export/leads")
+    def export_leads(format: str = "csv"):
+        import csv
+        import io
+        from fastapi.responses import StreamingResponse
+        dm = DataManager()
+        leads = dm.get_all_leads()
+        
+        output = io.StringIO()
+        if format == "csv":
+            if not leads: return {"message": "No leads to export"}
+            writer = csv.DictWriter(output, fieldnames=leads[0].keys())
+            writer.writeheader()
+            writer.writerows(leads)
+            filename = f"leads_export_{int(time.time())}.csv"
+            media_type = "text/csv"
+        else:
+            output.write(json.dumps(leads, indent=2))
+            filename = f"leads_export_{int(time.time())}.json"
+            media_type = "application/json"
+            
+        output.seek(0)
+        return StreamingResponse(
+            output,
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
 
     @app.get("/health")
     def health_check():

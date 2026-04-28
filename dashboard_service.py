@@ -162,3 +162,40 @@ class DashboardService:
         except Exception as e:
             logger.error(f"Error getting daily volume: {e}")
             return []
+
+    def get_leads_list(self, limit: int = 50, offset: int = 0, status: str = None) -> List[Dict[str, Any]]:
+        """Get a list of leads with optional filtering."""
+        try:
+            conn = self.dm.get_connection()
+            cursor = conn.cursor()
+            
+            query = "SELECT id, business_name, email, phone, website, status, created_at FROM leads"
+            params = []
+            
+            if status:
+                query += " WHERE status = ?"
+                params.append(status)
+                
+            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            leads = []
+            for row in rows:
+                leads.append({
+                    "id": row[0],
+                    "business_name": row[1],
+                    "email": row[2],
+                    "phone": row[3],
+                    "website": row[4],
+                    "status": row[5],
+                    "created_at": row[6]
+                })
+                
+            conn.close()
+            return leads
+        except Exception as e:
+            logger.error(f"Error getting leads list: {e}")
+            return []
