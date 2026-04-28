@@ -105,8 +105,10 @@ if not GROQ_API_KEY and not OPENAI_API_KEY:
     print("WARNING: No LLM API Keys found in .env. Email generation will use generic templates.")
 
 # --- Runtime Settings ---
-DRY_RUN = False  # Emails will be sent if in window
-ALLOW_RISKY_EMAILS = os.getenv("ALLOW_RISKY_EMAILS", "False").lower() == "true"
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+SKIP_JITTER = os.getenv("SKIP_JITTER", "false").lower() == "true"
+BOT_AUTOSTART = os.getenv("BOT_AUTOSTART", "false").lower() == "true"
+ALLOW_RISKY_EMAILS = os.getenv("ALLOW_RISKY_EMAILS", "false").lower() == "true"
 HEADLESS = True  # Headless for reliability in automated runs
 LOG_FILE = "activity.log"
 

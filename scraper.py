@@ -603,6 +603,7 @@ class Scraper:
                                 "button[aria-label*='Email']",
                                 "button[aria-label*='email']",
                             ]
+                            email_regex = r"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
                             for selector in email_selectors:
                                 try:
                                     email_elements = detail_pane.find_elements(By.CSS_SELECTOR, selector)
@@ -611,10 +612,12 @@ class Scraper:
                                 for element in email_elements:
                                     href = (element.get_attribute("href") or "").strip()
                                     if href.startswith("mailto:"):
-                                        email = href.replace("mailto:", "").split("?")[0].strip()
-                                        break
+                                        email_candidate = href.replace("mailto:", "").split("?")[0].strip()
+                                        if re.match(email_regex, email_candidate):
+                                            email = email_candidate
+                                            break
                                     text = (element.get_attribute("aria-label") or element.text or "").strip()
-                                    match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
+                                    match = re.search(email_regex, text)
                                     if match:
                                         email = match.group(0).strip()
                                         break
@@ -622,7 +625,7 @@ class Scraper:
                                     break
                             if not email:
                                 body_text = detail_pane.text
-                                match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", body_text)
+                                match = re.search(email_regex, body_text)
                                 if match:
                                     email = match.group(0).strip()
                         except:

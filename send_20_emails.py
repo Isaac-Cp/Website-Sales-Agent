@@ -13,12 +13,11 @@ import json
 
 print("--- SEND 20 EMAILS STARTING ---")
 
-# try:
-#     sys.stdout.reconfigure(encoding="utf-8")
-# except Exception:
-#     pass
-
-print("--- SYS STDOUT RECONFIGURED (skipped) ---")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    print("--- SYS STDOUT RECONFIGURED TO UTF-8 ---")
+except Exception as e:
+    print(f"--- SYS STDOUT RECONFIGURE FAILED: {e} ---")
 
 import config
 from mailer import build_smtp_pool

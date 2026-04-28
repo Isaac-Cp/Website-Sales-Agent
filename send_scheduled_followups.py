@@ -1,4 +1,5 @@
 
+import sys
 import datetime
 import time
 import json
@@ -16,6 +17,11 @@ def parse_args():
     return parser.parse_args()
 
 def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     args = parse_args()
     if args.dry_run:
         config.DRY_RUN = True
