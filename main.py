@@ -3,28 +3,18 @@ import random
 import json
 import argparse
 import os
+import secrets
+import threading
+import datetime as dt
 from urllib.parse import urlparse
 import config
-from scraper import Scraper
 from database import DataManager
-from mailer import Mailer, build_smtp_pool
-from validator import get_email_validator
-import llm_helper
-import yelp_api_scraper
 import concurrent.futures
-import imap_tracker
 import asyncio
-from scraper import Scraper
-from database import DataManager
-from mailer import Mailer
-import osm_scraper
-from freedom_search import FreedomSearch
-from yelp_scraper import extract_business_website
-from scrapers_manager import run_parallel_scraping
-from utils import canonicalize_website, pagespeed
-from core.pipeline import run_pipeline
 from bot_manager import BotManager
 from dashboard_data import build_dashboard_payload, get_dashboard_lead_detail
+from storage_manager import inspect_local_storage, run_local_storage_maintenance
+from web_ui import render_dashboard_shell
 try:
     from langchain_groq import ChatGroq
 except ImportError:
@@ -55,13 +45,17 @@ except Exception:
     Langfuse = None
 
 try:
-    from fastapi import FastAPI, HTTPException, WebSocket
-    from fastapi.responses import HTMLResponse
-except Exception:
+    from fastapi import FastAPI, HTTPException, WebSocket, Header
+    from fastapi.responses import HTMLResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
+except ImportError:
     FastAPI = None
     HTTPException = None
     WebSocket = None
+    Header = None
     HTMLResponse = None
+    FileResponse = None
+    StaticFiles = None
 
 try:
     import uvicorn
@@ -75,9 +69,448 @@ except Exception:
 
 APP_BOOT_TS = time.time()
 BOT_MANAGER = BotManager(__file__)
+DASHBOARD_DEFAULT_LIMITS = {"recent_limit": 12, "event_limit": 18, "due_limit": 10, "top_limit": 8}
+DASHBOARD_BOOTSTRAP_LIMITS = {"recent_limit": 4, "event_limit": 4, "due_limit": 4, "top_limit": 4}
+DASHBOARD_CACHE_TTL = 60
+DASHBOARD_CACHE = {"payload": None, "built_at": 0.0, "refreshing": False, "error": None}
+DIAGNOSTICS_CACHE_TTL = 30
+DIAGNOSTICS_CACHE = {"payload": None, "built_at": 0.0}
+ADMIN_SESSIONS = {}
+Scraper = None
+Mailer = None
+build_smtp_pool = None
+get_email_validator = None
+llm_helper = None
+yelp_api_scraper = None
+imap_tracker = None
+osm_scraper = None
+FreedomSearch = None
+extract_business_website = None
+run_parallel_scraping = None
+canonicalize_website = None
+pagespeed = None
+run_pipeline = None
 
 
-def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_limit=12):
+def _load_runtime_dependencies():
+    """Import non-web runtime dependencies only when automation paths need them."""
+    global Scraper, Mailer, build_smtp_pool, get_email_validator
+    global llm_helper, yelp_api_scraper, imap_tracker, osm_scraper
+    global FreedomSearch, extract_business_website, run_parallel_scraping
+    global canonicalize_website, pagespeed, run_pipeline
+
+    if Scraper is None:
+        from scraper import Scraper as _Scraper
+
+        Scraper = _Scraper
+    if Mailer is None or build_smtp_pool is None:
+        from mailer import Mailer as _Mailer, build_smtp_pool as _build_smtp_pool
+
+        Mailer = _Mailer
+        build_smtp_pool = _build_smtp_pool
+    if get_email_validator is None:
+        from validator import get_email_validator as _get_email_validator
+
+        get_email_validator = _get_email_validator
+    if llm_helper is None:
+        import llm_helper as _llm_helper
+
+        llm_helper = _llm_helper
+    if yelp_api_scraper is None:
+        import yelp_api_scraper as _yelp_api_scraper
+
+        yelp_api_scraper = _yelp_api_scraper
+    if imap_tracker is None:
+        import imap_tracker as _imap_tracker
+
+        imap_tracker = _imap_tracker
+    if osm_scraper is None:
+        import osm_scraper as _osm_scraper
+
+        osm_scraper = _osm_scraper
+    if FreedomSearch is None:
+        from freedom_search import FreedomSearch as _FreedomSearch
+
+        FreedomSearch = _FreedomSearch
+    if extract_business_website is None:
+        from yelp_scraper import extract_business_website as _extract_business_website
+
+        extract_business_website = _extract_business_website
+    if run_parallel_scraping is None:
+        from scrapers_manager import run_parallel_scraping as _run_parallel_scraping
+
+        run_parallel_scraping = _run_parallel_scraping
+    if canonicalize_website is None or pagespeed is None:
+        from utils import canonicalize_website as _canonicalize_website, pagespeed as _pagespeed
+
+        canonicalize_website = _canonicalize_website
+        pagespeed = _pagespeed
+    if run_pipeline is None:
+        from core.pipeline import run_pipeline as _run_pipeline
+
+        run_pipeline = _run_pipeline
+
+
+def _dashboard_placeholder_payload():
+    runtime = service_snapshot()
+    return {
+        "generated_at": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "runtime": {
+            "database_persistent": runtime.get("persistent_database"),
+            "database_path": runtime.get("database_target"),
+            "bot_autostart_enabled": runtime.get("bot_status") not in {"stopped", "unknown"},
+            "dry_run": getattr(config, "DRY_RUN", False),
+            "uptime_seconds": max(0, int(time.time() - APP_BOOT_TS)),
+            "execution_note": "Dashboard cache is warming up in the background.",
+            "email_window": {
+                "start": getattr(config, "EMAIL_WINDOW_START", "--"),
+                "end": getattr(config, "EMAIL_WINDOW_END", "--"),
+            },
+            "headless": getattr(config, "HEADLESS_BROWSER", True),
+            "parallel_workers": getattr(config, "PARALLEL_WORKERS", 1),
+        },
+        "overview": {"daily_actions": runtime.get("daily_actions", 0), "due_followups": runtime.get("due_followups", 0), "total_leads": runtime.get("total_leads", 0), "with_email": 0, "with_phone": 0, "high_value": 0, "no_website": 0, "blacklisted": 0},
+        "health": {"sent_total": 0, "reply_total": 0, "reply_rate": 0.0, "open_rate": 0.0, "conversion_total": 0, "conversion_rate": 0.0, "risk_total": 0},
+        "smtp_health": {"smtp_ready": False, "imap_ready": False, "smtp_accounts": 0, "daily_remaining": 0, "daily_actions": runtime.get("daily_actions", 0), "max_daily_actions": getattr(config, "MAX_EMAILS_PER_DAY", 0), "send_window": {"is_open": None}},
+        "proof_of_outreach": {},
+        "filters": {"statuses": [], "cities": [], "niches": [], "event_types": []},
+        "activity_series": [],
+        "outreach_funnel": [],
+        "pipeline": {"statuses": [], "stages": []},
+        "distributions": {"cities": [], "niches": []},
+        "attribution": {"personas": [], "hooks": [], "cities": [], "niches": []},
+        "due_followups": [],
+        "recent_events": [],
+        "top_leads": [],
+        "lead_feed": [],
+        "recent_leads": [],
+        "recent_failures": [],
+        "recent_runs": [],
+        "training_examples": [],
+        "automation": BOT_MANAGER.snapshot(),
+        "quality": {},
+        "notifications": [{
+            "level": "info",
+            "title": "Dashboard warming up",
+            "message": "The control room is available now and the full analytics snapshot is being prepared in the background.",
+            "timestamp": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }],
+        "_cache": {"state": "warming", "age_seconds": None},
+    }
+
+
+def _build_dashboard_payload_cached():
+    dm = DataManager()
+    payload = build_dashboard_payload(
+        dm,
+        APP_BOOT_TS,
+        recent_limit=DASHBOARD_DEFAULT_LIMITS["recent_limit"],
+        event_limit=DASHBOARD_DEFAULT_LIMITS["event_limit"],
+        due_limit=DASHBOARD_DEFAULT_LIMITS["due_limit"],
+        top_limit=DASHBOARD_DEFAULT_LIMITS["top_limit"],
+    )
+    payload["_cache"] = {"state": "ready", "age_seconds": 0}
+    return payload
+
+
+def _refresh_dashboard_cache():
+    if DASHBOARD_CACHE["refreshing"]:
+        return
+    DASHBOARD_CACHE["refreshing"] = True
+    try:
+        payload = _build_dashboard_payload_cached()
+        DASHBOARD_CACHE["payload"] = payload
+        DASHBOARD_CACHE["built_at"] = time.time()
+        DASHBOARD_CACHE["error"] = None
+    except Exception as exc:
+        DASHBOARD_CACHE["error"] = str(exc)
+    finally:
+        DASHBOARD_CACHE["refreshing"] = False
+
+
+def _refresh_dashboard_cache_async():
+    if DASHBOARD_CACHE["refreshing"]:
+        return
+    threading.Thread(target=_refresh_dashboard_cache, daemon=True).start()
+
+
+def get_dashboard_response_cached():
+    payload = DASHBOARD_CACHE["payload"]
+    if payload:
+        age_seconds = max(0, int(time.time() - DASHBOARD_CACHE["built_at"]))
+        payload["_cache"] = {"state": "refreshing" if DASHBOARD_CACHE["refreshing"] else "ready", "age_seconds": age_seconds}
+        if age_seconds > DASHBOARD_CACHE_TTL and not DASHBOARD_CACHE["refreshing"]:
+            _refresh_dashboard_cache_async()
+        return payload
+    _refresh_dashboard_cache_async()
+    placeholder = _dashboard_placeholder_payload()
+    if DASHBOARD_CACHE["error"]:
+        placeholder["notifications"].append({
+            "level": "warn",
+            "title": "Last cache refresh failed",
+            "message": DASHBOARD_CACHE["error"],
+            "timestamp": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        })
+    return placeholder
+
+
+def _sanitize_exception(exc):
+    return str(exc).strip()[:500] if exc else None
+
+
+def _serialize_list_env(values):
+    return json.dumps([str(item).strip() for item in values if str(item).strip()])
+
+
+def _admin_snapshot():
+    return {
+        "target_niches": list(getattr(config, "TARGET_NICHES", [])),
+        "target_locations": list(getattr(config, "TARGET_LOCATIONS", [])),
+        "search_tags": [item.strip() for item in str(getattr(config, "DEFAULT_TITLES", "")).split(",") if item.strip()],
+        "daily_email_limit": int(getattr(config, "MAX_DAILY_ACTIONS", 0)),
+        "email_window_start": getattr(config, "EMAIL_WINDOW_START", "00:00"),
+        "email_window_end": getattr(config, "EMAIL_WINDOW_END", "23:59"),
+        "blacklisted_domains": list(getattr(config, "BLACKLISTED_DOMAINS", [])),
+        "blacklisted_emails": list(getattr(config, "BLACKLISTED_EMAILS", [])),
+        "default_persona": getattr(config, "DEFAULT_PERSONA", "Technical Auditor"),
+    }
+
+
+def _env_file_path():
+    return os.path.join(os.path.dirname(__file__), ".env")
+
+
+def _write_env_value(key, value):
+    env_path = _env_file_path()
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    prefix = f"{key}="
+    replaced = False
+    new_lines = []
+    for line in lines:
+        if line.startswith(prefix):
+            new_lines.append(f"{key}={value}")
+            replaced = True
+        else:
+            new_lines.append(line)
+    if not replaced:
+        new_lines.append(f"{key}={value}")
+    with open(env_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(new_lines).rstrip() + "\n")
+
+
+def _apply_admin_settings(payload):
+    if "target_niches" in payload:
+        config.TARGET_NICHES = [str(item).strip() for item in payload.get("target_niches", []) if str(item).strip()]
+        _write_env_value("TARGET_NICHES_JSON", _serialize_list_env(config.TARGET_NICHES))
+    if "target_locations" in payload:
+        config.TARGET_LOCATIONS = [str(item).strip() for item in payload.get("target_locations", []) if str(item).strip()]
+        _write_env_value("TARGET_LOCATIONS_JSON", _serialize_list_env(config.TARGET_LOCATIONS))
+    if "search_tags" in payload:
+        tags = [str(item).strip() for item in payload.get("search_tags", []) if str(item).strip()]
+        config.DEFAULT_TITLES = ",".join(tags)
+        _write_env_value("DEFAULT_TITLES", config.DEFAULT_TITLES)
+    if "daily_email_limit" in payload:
+        config.MAX_DAILY_ACTIONS = int(payload["daily_email_limit"])
+        _write_env_value("MAX_DAILY_ACTIONS", str(config.MAX_DAILY_ACTIONS))
+    if "email_window_start" in payload:
+        config.EMAIL_WINDOW_START = str(payload["email_window_start"]).strip()
+        _write_env_value("EMAIL_WINDOW_START", config.EMAIL_WINDOW_START)
+    if "email_window_end" in payload:
+        config.EMAIL_WINDOW_END = str(payload["email_window_end"]).strip()
+        _write_env_value("EMAIL_WINDOW_END", config.EMAIL_WINDOW_END)
+    if "blacklisted_domains" in payload:
+        config.BLACKLISTED_DOMAINS = [str(item).strip().lower() for item in payload.get("blacklisted_domains", []) if str(item).strip()]
+        _write_env_value("BLACKLISTED_DOMAINS", ",".join(config.BLACKLISTED_DOMAINS))
+    if "blacklisted_emails" in payload:
+        config.BLACKLISTED_EMAILS = [str(item).strip().lower() for item in payload.get("blacklisted_emails", []) if str(item).strip()]
+        _write_env_value("BLACKLISTED_EMAILS", ",".join(config.BLACKLISTED_EMAILS))
+    if "default_persona" in payload:
+        config.DEFAULT_PERSONA = str(payload["default_persona"]).strip() or getattr(config, "DEFAULT_PERSONA", "Technical Auditor")
+        _write_env_value("DEFAULT_PERSONA", config.DEFAULT_PERSONA)
+
+
+def _create_admin_session():
+    token = secrets.token_urlsafe(24)
+    ADMIN_SESSIONS[token] = time.time() + 60 * 60 * 8
+    return token
+
+
+def _is_valid_admin_token(token):
+    if not token:
+        return False
+    expires_at = ADMIN_SESSIONS.get(token)
+    if not expires_at:
+        return False
+    if expires_at < time.time():
+        ADMIN_SESSIONS.pop(token, None)
+        return False
+    return True
+
+
+def _database_diagnostics():
+    started = time.time()
+    result = {
+        "mode": getattr(config, "DB_TYPE", "postgres"),
+        "configured": bool(getattr(config, "DATABASE_URL", None)),
+        "backend": "postgres",
+        "ok": False,
+        "latency_ms": None,
+        "error": None,
+    }
+    try:
+        dm = DataManager()
+        result["backend"] = "postgres" if getattr(dm, "is_postgres", False) else "sqlite"
+        conn = dm.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        conn.close()
+        result["ok"] = True
+    except Exception as exc:
+        result["error"] = _sanitize_exception(exc)
+    result["latency_ms"] = int((time.time() - started) * 1000)
+    return result
+
+
+def _smtp_diagnostics():
+    started = time.time()
+    smtp_accounts = config.get_smtp_accounts()
+    result = {
+        "configured": bool(smtp_accounts),
+        "accounts": len(smtp_accounts),
+        "ok": False,
+        "latency_ms": None,
+        "error": None,
+    }
+    try:
+        if not smtp_accounts:
+            raise RuntimeError("No SMTP accounts configured")
+        _load_runtime_dependencies()
+        pool = build_smtp_pool(smtp_accounts)
+        working = pool.get_working_mailer(test_login=True)
+        result["ok"] = bool(working)
+        if not working:
+            result["error"] = "No working SMTP account passed login test"
+    except Exception as exc:
+        result["error"] = _sanitize_exception(exc)
+    result["latency_ms"] = int((time.time() - started) * 1000)
+    return result
+
+
+def _llm_diagnostics():
+    started = time.time()
+    result = {
+        "configured": bool(getattr(config, "GROQ_API_KEY", None) or getattr(config, "OPENAI_API_KEY", None)),
+        "providers": {
+            "groq": bool(getattr(config, "GROQ_API_KEY", None)),
+            "openai": bool(getattr(config, "OPENAI_API_KEY", None)),
+        },
+        "ok": False,
+        "latency_ms": None,
+        "error": None,
+        "mode": "fallback_only",
+    }
+    try:
+        if not result["configured"]:
+            raise RuntimeError("No LLM API key configured")
+        result["ok"] = True
+        result["mode"] = "provider_configured"
+    except Exception as exc:
+        result["error"] = _sanitize_exception(exc)
+    result["latency_ms"] = int((time.time() - started) * 1000)
+    return result
+
+
+def _recent_ai_activity():
+    result = {
+        "ok": False,
+        "generated_24h": 0,
+        "sent_24h": 0,
+        "last_generated_at": None,
+        "last_sent_at": None,
+        "recent_providers": [],
+        "error": None,
+    }
+    try:
+        dm = DataManager()
+        conn = dm.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE event_type = 'email_generated') AS generated_count,
+                COUNT(*) FILTER (WHERE event_type = 'sent') AS sent_count,
+                MAX(timestamp) FILTER (WHERE event_type = 'email_generated') AS last_generated_at,
+                MAX(timestamp) FILTER (WHERE event_type = 'sent') AS last_sent_at
+            FROM email_events
+            WHERE timestamp >= NOW() - INTERVAL '24 hours'
+            """
+        )
+        generated_count, sent_count, last_generated_at, last_sent_at = cursor.fetchone()
+        result["generated_24h"] = int(generated_count or 0)
+        result["sent_24h"] = int(sent_count or 0)
+        result["last_generated_at"] = last_generated_at.isoformat() if last_generated_at else None
+        result["last_sent_at"] = last_sent_at.isoformat() if last_sent_at else None
+
+        cursor.execute(
+            """
+            SELECT meta
+            FROM email_events
+            WHERE event_type IN ('email_generated', 'sent')
+              AND timestamp >= NOW() - INTERVAL '24 hours'
+            ORDER BY timestamp DESC
+            LIMIT 20
+            """
+        )
+        providers = []
+        for (meta,) in cursor.fetchall():
+            try:
+                payload = json.loads(meta or "{}")
+            except Exception:
+                payload = {}
+            provider = payload.get("provider")
+            if provider and provider not in providers:
+                providers.append(provider)
+        conn.close()
+        result["recent_providers"] = providers
+        result["ok"] = True
+    except Exception as exc:
+        result["error"] = _sanitize_exception(exc)
+    return result
+
+
+def get_runtime_diagnostics(force=False):
+    if (
+        not force
+        and DIAGNOSTICS_CACHE["payload"] is not None
+        and (time.time() - DIAGNOSTICS_CACHE["built_at"]) < DIAGNOSTICS_CACHE_TTL
+    ):
+        return DIAGNOSTICS_CACHE["payload"]
+    payload = {
+        "generated_at": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "database": _database_diagnostics(),
+        "smtp": _smtp_diagnostics(),
+        "llm": _llm_diagnostics(),
+        "ai_activity": _recent_ai_activity(),
+        "website": {
+            "port": getattr(config, "FASTAPI_PORT", None),
+            "cache_ready": bool(DASHBOARD_CACHE.get("payload")),
+            "cache_error": DASHBOARD_CACHE.get("error"),
+        },
+    }
+    DIAGNOSTICS_CACHE["payload"] = payload
+    DIAGNOSTICS_CACHE["built_at"] = time.time()
+    return payload
+
+
+def build_dashboard_response(recent_limit=None, event_limit=None, due_limit=None, top_limit=None):
+    recent_limit = DASHBOARD_DEFAULT_LIMITS["recent_limit"] if recent_limit is None else recent_limit
+    event_limit = DASHBOARD_DEFAULT_LIMITS["event_limit"] if event_limit is None else event_limit
+    due_limit = DASHBOARD_DEFAULT_LIMITS["due_limit"] if due_limit is None else due_limit
+    top_limit = DASHBOARD_DEFAULT_LIMITS["top_limit"] if top_limit is None else top_limit
     dm = DataManager()
     payload = build_dashboard_payload(
         dm,
@@ -87,6 +520,7 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
         due_limit=due_limit,
         top_limit=top_limit,
     )
+    payload["local_storage"] = inspect_local_storage()
     automation = BOT_MANAGER.snapshot()
     warnings = []
     blocking_config_issues = config.validate_config()
@@ -97,6 +531,8 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
     integrations = runtime.get("integrations") or {}
     email_window = runtime.get("email_window") or {}
     proof = payload.get("proof_of_outreach") or {}
+    storage = payload.get("storage") or {}
+    local_storage = payload.get("local_storage") or {}
     notifications = list(payload.get("notifications") or [])
     recent_runs = list(automation.get("recent_runs") or [])
 
@@ -218,13 +654,13 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
             }
         )
 
-    if runtime.get("database", {}).get("backend") == "sqlite" and not runtime.get("database_persistent", False):
-        soft_blockers.append("The app is using a non-persistent SQLite file, so deployment restarts can wipe the dashboard history.")
+    for alert in list(storage.get("alerts") or [])[:2]:
+        soft_blockers.append(alert)
         action_items.append(
             {
                 "level": "warn",
-                "title": "Use a persistent database path",
-                "message": "Set DB_FILE to a persistent disk path such as /var/data/leads.db, or use DATABASE_URL so leads and history survive redeploys.",
+                "title": "Review storage pressure",
+                "message": alert,
             }
         )
 
@@ -416,12 +852,12 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
             )
             break
 
-    if runtime.get("database", {}).get("backend") == "sqlite" and not runtime.get("database_persistent", False):
+    for alert in list(storage.get("alerts") or [])[:2]:
         warnings.append(
             {
                 "level": "warn",
-                "title": "Database storage is ephemeral",
-                "message": f"The app is storing SQLite data at {runtime.get('database_path') or 'leads.db'}. On container restarts, that history can disappear unless DB_FILE points to persistent storage or DATABASE_URL is configured.",
+                "title": "Storage alert",
+                "message": alert,
             }
         )
 
@@ -489,6 +925,8 @@ def build_dashboard_response(recent_limit=24, event_limit=60, due_limit=18, top_
         "total_leads": total_leads,
         "database_persistent": runtime.get("database_persistent", False),
         "database_path": runtime.get("database_path"),
+        "database_storage": storage,
+        "local_storage": local_storage,
         "blocking_issues": hard_blockers + blocking_config_issues,
         "attention_issues": soft_blockers,
         "optional_warnings": optional_config_warnings,
@@ -503,6 +941,11 @@ app = None
 if FastAPI:
     app = FastAPI(title="Website Sales Agent API")
 
+    # Mount static files from the built frontend
+    static_dir = os.path.join(os.path.dirname(__file__), "static", "dashboard")
+    if os.path.exists(static_dir):
+        app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+
     def service_snapshot():
         snapshot = {
             "status": "healthy",
@@ -512,11 +955,11 @@ if FastAPI:
             "booted_at": APP_BOOT_TS,
         }
         try:
-            dm = DataManager()
-            dashboard = build_dashboard_payload(dm, APP_BOOT_TS, recent_limit=4, event_limit=4, due_limit=4, top_limit=4)
-            snapshot["daily_actions"] = dashboard["overview"]["daily_actions"]
-            snapshot["due_followups"] = dashboard["overview"]["due_followups"]
-            snapshot["total_leads"] = dashboard["overview"]["total_leads"]
+            dashboard = get_dashboard_response_cached()
+            overview = dashboard.get("overview", {})
+            snapshot["daily_actions"] = overview.get("daily_actions", 0)
+            snapshot["due_followups"] = overview.get("due_followups", 0)
+            snapshot["total_leads"] = overview.get("total_leads", 0)
             snapshot["bot_status"] = BOT_MANAGER.snapshot().get("status")
         except Exception as e:
             snapshot["error"] = str(e)
@@ -525,6 +968,9 @@ if FastAPI:
     @app.on_event("startup")
     async def app_startup():
         BOT_MANAGER.start()
+        # Optionally trigger a run if configured
+        if config.BOT_AUTOSTART:
+            BOT_MANAGER.request_run_now()
 
     @app.on_event("shutdown")
     async def app_shutdown():
@@ -532,16 +978,24 @@ if FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def homepage():
-        """New modular dashboard v3.0 (Sleek Dark Mode)."""
-        from fastapi.templating import Jinja2Templates
-        templates = Jinja2Templates(directory="templates")
-        return templates.TemplateResponse("dashboard_v3.html", {"request": {}})
+        """Serve the built React frontend or fallback to the template shell."""
+        static_index = os.path.join(os.path.dirname(__file__), "static", "dashboard", "index.html")
+        if os.path.exists(static_index):
+            return FileResponse(static_index)
+        
+        _refresh_dashboard_cache_async()
+        return HTMLResponse(render_dashboard_shell(initial_payload=get_dashboard_response_cached(), version="v6"))
+
+    @app.get("/v6", response_class=HTMLResponse)
+    def dashboard_v6():
+        """New React-based dashboard (v6)."""
+        _refresh_dashboard_cache_async()
+        return HTMLResponse(render_dashboard_shell(initial_payload=get_dashboard_response_cached(), version="v6"))
 
     @app.get("/v3", response_class=HTMLResponse)
     def dashboard_v3():
-        from fastapi.templating import Jinja2Templates
-        templates = Jinja2Templates(directory="templates")
-        return templates.TemplateResponse("dashboard_v3.html", {"request": {}})
+        _refresh_dashboard_cache_async()
+        return HTMLResponse(render_dashboard_shell(initial_payload=get_dashboard_response_cached(), version="v3"))
 
     @app.get("/v2", response_class=HTMLResponse)
     def dashboard_v2_legacy():
@@ -565,12 +1019,132 @@ if FastAPI:
         from dashboard_service import DashboardService
         dm = DataManager()
         service = DashboardService(dm)
+        
+        # Calculate uptime
+        uptime = int(time.time() - APP_BOOT_TS)
+        
+        stats = service.get_stats_overview()
+        stats["uptime_seconds"] = uptime
+        
+        # Add additional database health metrics
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM leads WHERE email IS NOT NULL AND email != ''")
+            stats["with_email"] = cursor.fetchone()[0]
+            conn.close()
+        except Exception:
+            stats["with_email"] = 0
+
+        smtp_accounts = config.get_smtp_accounts()
+
         return {
-            "stats": service.get_stats_overview(),
+            "stats": stats,
             "activity": service.get_recent_activity(),
             "funnel": service.get_lead_funnel(),
-            "daily_volume": service.get_daily_volume()
+            "daily_volume": service.get_daily_volume(),
+            "runtime": {
+                "integrations": {
+                    "smtp_accounts": len(smtp_accounts),
+                    "smtp_ready": len(smtp_accounts) > 0,
+                    "llm_ready": bool(config.GROQ_API_KEY or config.OPENAI_API_KEY)
+                }
+            }
         }
+
+    @app.get("/api/v2/analytics", dependencies=[Depends(get_api_key)])
+    def analytics_data():
+        from dashboard_service import DashboardService
+        dm = DataManager()
+        service = DashboardService(dm)
+        return service.get_analytics_data()
+
+    @app.get("/api/v2/system/stats", dependencies=[Depends(get_api_key)])
+    def system_stats():
+        from dashboard_service import DashboardService
+        dm = DataManager()
+        service = DashboardService(dm)
+        stats = service.get_system_stats()
+        
+        # Add bot manager snapshot
+        stats["bot"] = BOT_MANAGER.snapshot()
+        
+        # Add process info if psutil is available
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            stats["process"] = {
+                "memory_info": process.memory_info()._asdict(),
+                "cpu_percent": process.cpu_percent(),
+                "threads": len(process.threads()),
+                "open_files": len(process.open_files())
+            }
+        except ImportError:
+            stats["process"] = {"error": "psutil not installed"}
+            
+        return stats
+
+    @app.post("/api/v2/system/maintenance/run", dependencies=[Depends(get_api_key)])
+    def run_maintenance_task(payload: dict):
+        task_name = payload.get("task")
+        if not task_name: raise HTTPException(status_code=400, detail="Missing task name")
+        
+        # Trigger maintenance logic (simulated for now, would call run_maintenance.py functions)
+        try:
+            from storage_manager import run_local_storage_maintenance
+            if task_name == "storage_cleanup":
+                run_local_storage_maintenance()
+            elif task_name == "db_optimization":
+                dm = DataManager()
+                conn = dm.get_connection(admin=True)
+                cursor = conn.cursor()
+                if dm.is_postgres: cursor.execute("ANALYZE")
+                else: cursor.execute("VACUUM")
+                conn.commit()
+                conn.close()
+            
+            return {"status": "success", "message": f"Task {task_name} started successfully"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/api/v2/dashboard/leads/{lead_id}", dependencies=[Depends(get_api_key)])
+    def lead_details(lead_id: str):
+        from dashboard_service import DashboardService
+        dm = DataManager()
+        service = DashboardService(dm)
+        return service.get_lead_details(lead_id)
+
+    @app.get("/api/v2/leads", dependencies=[Depends(get_api_key)])
+    def leads_list(limit: int = 50, offset: int = 0, status: str = None):
+        dm = DataManager()
+        # Fallback to simple query if service method is missing or failing
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            query = "SELECT id, business_name, email, phone, website, status, created_at FROM leads"
+            params = []
+            if status:
+                query += " WHERE status = %s"
+                params.append(status)
+            query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            leads = []
+            for row in rows:
+                leads.append({
+                    "id": row[0],
+                    "business_name": row[1],
+                    "email": row[2],
+                    "phone": row[3],
+                    "website": row[4],
+                    "status": row[5],
+                    "created_at": row[6]
+                })
+            conn.close()
+            return leads
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/v2/leads", dependencies=[Depends(get_api_key)])
     def leads_list_v2(status: str = None, limit: int = 50, offset: int = 0):
@@ -612,6 +1186,11 @@ if FastAPI:
         """Standard health check for Koyeb/PaaS."""
         return {"status": "healthy", "service": "website-sales-agent"}
 
+    @app.get("/diagnostics")
+    def diagnostics(force: bool = False):
+        """Operational diagnostics for DB, SMTP, LLM, and dashboard cache state."""
+        return get_runtime_diagnostics(force=force)
+
     @app.get("/status")
     def site_status():
         """Returns the current status and activity count."""
@@ -619,7 +1198,76 @@ if FastAPI:
 
     @app.get("/api/dashboard")
     def dashboard_data():
-        return build_dashboard_response()
+        payload = get_dashboard_response_cached()
+        # Inject dynamic AI insights
+        try:
+            from dashboard_service import DashboardService
+            dm = DataManager()
+            service = DashboardService(dm)
+            payload["ai_insights"] = service.get_ai_insights()
+        except Exception:
+            payload["ai_insights"] = {}
+        return payload
+
+    @app.get("/api/leads/{lead_id}/email-preview")
+    def lead_email_preview(lead_id: int):
+        """Fetch the latest generated email for a lead."""
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            # Try training_examples first (stores best generated content)
+            cursor.execute("SELECT subject, body FROM training_examples WHERE lead_id = %s ORDER BY timestamp DESC LIMIT 1" if dm.is_postgres else "SELECT subject, body FROM training_examples WHERE lead_id = ? ORDER BY timestamp DESC LIMIT 1", (lead_id,))
+            row = cursor.fetchone()
+            if row:
+                return {"subject": row[0], "body": row[1], "source": "training_cache"}
+            
+            # Fallback to email_events meta
+            cursor.execute("SELECT meta FROM email_events WHERE lead_id = %s AND event_type = 'email_generated' ORDER BY timestamp DESC LIMIT 1" if dm.is_postgres else "SELECT meta FROM email_events WHERE lead_id = ? AND event_type = 'email_generated' ORDER BY timestamp DESC LIMIT 1", (lead_id,))
+            row = cursor.fetchone()
+            if row:
+                import json
+                meta = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return {"subject": meta.get("subject"), "body": meta.get("body"), "source": "event_log"}
+            
+            return {"subject": None, "body": None, "message": "No email generated yet for this lead."}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            conn.close()
+
+    @app.get("/api/logs")
+    def get_logs(lines: int = 50):
+        log_file = getattr(config, "LOG_FILE", "activity.log")
+        if not os.path.exists(log_file):
+            return {"logs": [f"Log file not found at {log_file}"]}
+        
+        try:
+            # Efficiently read the last N lines
+            with open(log_file, "rb") as f:
+                try:
+                    f.seek(0, os.SEEK_END)
+                    buffer = bytearray()
+                    pointer = f.tell()
+                    lines_found = 0
+                    
+                    while pointer > 0 and lines_found <= lines:
+                        pointer -= 1
+                        f.seek(pointer)
+                        char = f.read(1)
+                        if char == b'\n':
+                            lines_found += 1
+                        buffer.extend(char)
+                    
+                    content = buffer[::-1].decode('utf-8', errors='ignore').splitlines()
+                    return {"logs": content[-lines:]}
+                except Exception:
+                    # Fallback to simple read if seek fails
+                    f.seek(0)
+                    content = f.read().decode('utf-8', errors='ignore').splitlines()
+                    return {"logs": content[-lines:]}
+        except Exception as e:
+            return {"logs": [f"Error reading logs: {e}"]}
 
     @app.get("/api/dashboard/leads/{lead_id}")
     def dashboard_lead_detail(lead_id: int):
@@ -632,6 +1280,29 @@ if FastAPI:
     @app.get("/api/bot/status")
     def bot_status():
         return BOT_MANAGER.snapshot()
+
+    @app.post("/api/bot/scrape")
+    def bot_scrape(payload: dict):
+        """Trigger a specific scraping session."""
+        niche = payload.get("niche")
+        location = payload.get("location")
+        if not niche or not location:
+            raise HTTPException(status_code=400, detail="Missing niche or location")
+        
+        # Start a thread to run the scraper without blocking the API
+        import threading
+        def run_scrape():
+            # Construct command args
+            args = parse_args()
+            # Override with UI values
+            # Note: This is a bit tricky because parse_args uses sys.argv
+            # For simplicity, we can just call the main logic directly or use a subprocess
+            import subprocess
+            cmd = ["python", "main.py", "--niche", niche, "--location", location, "--limit", "20"]
+            subprocess.run(cmd)
+
+        threading.Thread(target=run_scrape).start()
+        return {"status": "success", "message": f"Scraping started for {niche} in {location}"}
 
     @app.post("/api/bot/run-now")
     def bot_run_now():
@@ -649,14 +1320,333 @@ if FastAPI:
     def bot_set_interval(seconds: int):
         return BOT_MANAGER.set_loop_interval(seconds)
 
+    @app.post("/api/bot/config")
+    def bot_update_config(payload: dict):
+        """Update bot configuration variables."""
+        try:
+            # Update config module variables
+            if "dry_run" in payload:
+                config.DRY_RUN = bool(payload["dry_run"])
+            if "max_daily_actions" in payload:
+                config.MAX_DAILY_ACTIONS = int(payload["max_daily_actions"])
+            if "default_tech" in payload:
+                config.DEFAULT_TECH = str(payload["default_tech"])
+            if "parallel_workers" in payload:
+                config.PARALLEL_WORKERS = int(payload["parallel_workers"])
+            if "default_persona" in payload:
+                config.DEFAULT_PERSONA = str(payload["default_persona"])
+            
+            # Update BOT_MANAGER if needed
+            if "loop_interval" in payload:
+                BOT_MANAGER.set_loop_interval(int(payload["loop_interval"]))
+            
+            return {"status": "success", "message": "Configuration updated successfully", "current_config": {
+                "dry_run": config.DRY_RUN,
+                "max_daily_actions": getattr(config, "MAX_DAILY_ACTIONS", 0),
+                "parallel_workers": config.PARALLEL_WORKERS,
+                "default_persona": getattr(config, "DEFAULT_PERSONA", "Technical Auditor")
+            }}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/admin/auth")
+    def admin_auth(payload: dict):
+        password = str(payload.get("password", "")).strip()
+        pattern = str(payload.get("pattern", "")).strip()
+        configured_password = getattr(config, "ADMIN_DASHBOARD_PASSWORD", "") or getattr(config, "DASHBOARD_API_KEY", "")
+        configured_pattern = getattr(config, "ADMIN_DASHBOARD_PATTERN", "")
+        if not configured_password:
+            raise HTTPException(status_code=503, detail="Admin authentication is not configured")
+        if password != configured_password:
+            raise HTTPException(status_code=403, detail="Invalid password")
+        if configured_pattern and pattern != configured_pattern:
+            raise HTTPException(status_code=403, detail="Invalid pattern")
+        return {"status": "success", "token": _create_admin_session(), "config": _admin_snapshot()}
+
+    @app.get("/api/admin/config")
+    def admin_get_config(x_admin_token: str = Header(default=None)):
+        if not _is_valid_admin_token(x_admin_token):
+            raise HTTPException(status_code=403, detail="Admin access denied")
+        return {"status": "success", "config": _admin_snapshot()}
+
+    @app.post("/api/admin/config")
+    def admin_update_config(payload: dict, x_admin_token: str = Header(default=None)):
+        if not _is_valid_admin_token(x_admin_token):
+            raise HTTPException(status_code=403, detail="Admin access denied")
+        try:
+            _apply_admin_settings(payload)
+            _refresh_dashboard_cache_async()
+            return {"status": "success", "message": "Admin configuration updated", "config": _admin_snapshot()}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/admin/terminate")
+    def admin_terminate(x_admin_token: str = Header(default=None)):
+        if not _is_valid_admin_token(x_admin_token):
+            raise HTTPException(status_code=403, detail="Admin access denied")
+        BOT_MANAGER.stop()
+        return {"status": "success", "message": "Bot manager terminated"}
+
+    @app.get("/api/personas")
+    def get_personas():
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, description, icon, active, strategy_prompt FROM personas ORDER BY name")
+            rows = cursor.fetchall()
+            personas = []
+            for row in rows:
+                personas.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2],
+                    "icon": row[3],
+                    "active": bool(row[4]),
+                    "strategy_prompt": row[5]
+                })
+            
+            # Seed initial personas if none exist
+            if not personas:
+                initial = [
+                    ("Technical Auditor", "Focuses on website issues, SEO, and technical performance.", "Cpu", True, "Audit the website for SEO and performance issues..."),
+                    ("Growth Consultant", "Focuses on business expansion, lead generation, and ROI.", "TrendingUp", True, "Offer business growth strategies..."),
+                    ("Value-First Offer", "Direct approach with a clear value proposition.", "Zap", True, "Provide immediate value with a specific offer...")
+                ]
+                p = dm.placeholder
+                for name, desc, icon, active, prompt in initial:
+                    cursor.execute(f"INSERT INTO personas (name, description, icon, active, strategy_prompt) VALUES ({p}, {p}, {p}, {p}, {p}) ON CONFLICT(name) DO NOTHING" if dm.is_postgres else f"INSERT OR IGNORE INTO personas (name, description, icon, active, strategy_prompt) VALUES ({p}, {p}, {p}, {p}, {p})", (name, desc, icon, active, prompt))
+                conn.commit()
+                # Recurse once to get the seeded data
+                conn.close()
+                return get_personas()
+
+            conn.close()
+            return personas
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/personas", dependencies=[Depends(get_api_key)])
+    def save_persona(persona: dict):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            p = dm.placeholder
+            name = persona.get("name")
+            desc = persona.get("description")
+            icon = persona.get("icon")
+            active = bool(persona.get("active", True))
+            prompt = persona.get("strategy_prompt")
+            
+            if dm.is_postgres:
+                cursor.execute(f"INSERT INTO personas (name, description, icon, active, strategy_prompt) VALUES ({p}, {p}, {p}, {p}, {p}) ON CONFLICT(name) DO UPDATE SET description=EXCLUDED.description, icon=EXCLUDED.icon, active=EXCLUDED.active, strategy_prompt=EXCLUDED.strategy_prompt", (name, desc, icon, active, prompt))
+            else:
+                cursor.execute(f"INSERT OR REPLACE INTO personas (name, description, icon, active, strategy_prompt) VALUES ({p}, {p}, {p}, {p}, {p})", (name, desc, icon, active, prompt))
+            
+            conn.commit()
+            conn.close()
+            return {"status": "success"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.delete("/api/personas/{pid}", dependencies=[Depends(get_api_key)])
+    def delete_persona(pid: int):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM personas WHERE id = {dm.placeholder}", (pid,))
+            conn.commit()
+            return {"status": "success"}
+        finally: conn.close()
+
+    # --- ADMIN CRUD ENDPOINTS ---
+
+    @app.get("/api/admin/keywords", dependencies=[Depends(get_api_key)])
+    def get_keywords():
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, keyword, category, weight FROM app_keywords ORDER BY keyword")
+            return [{"id": r[0], "keyword": r[1], "category": r[2], "weight": r[3]} for r in cursor.fetchall()]
+        finally: conn.close()
+
+    @app.post("/api/admin/keywords", dependencies=[Depends(get_api_key)])
+    def save_keyword(data: dict):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            p = dm.placeholder
+            if dm.is_postgres:
+                cursor.execute(f"INSERT INTO app_keywords (keyword, category, weight) VALUES ({p}, {p}, {p}) ON CONFLICT(keyword) DO UPDATE SET category=EXCLUDED.category, weight=EXCLUDED.weight", (data["keyword"], data["category"], data.get("weight", 1.0)))
+            else:
+                cursor.execute(f"INSERT OR REPLACE INTO app_keywords (keyword, category, weight) VALUES ({p}, {p}, {p})", (data["keyword"], data["category"], data.get("weight", 1.0)))
+            conn.commit()
+            return {"status": "success"}
+        finally: conn.close()
+
+    @app.delete("/api/admin/keywords/{kid}", dependencies=[Depends(get_api_key)])
+    def delete_keyword(kid: int):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM app_keywords WHERE id = {dm.placeholder}", (kid,))
+            conn.commit()
+            return {"status": "success"}
+        finally: conn.close()
+
+    @app.get("/api/admin/tags", dependencies=[Depends(get_api_key)])
+    def get_tags():
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, tag, description FROM search_tags ORDER BY tag")
+            return [{"id": r[0], "tag": r[1], "description": r[2]} for r in cursor.fetchall()]
+        finally: conn.close()
+
+    @app.post("/api/admin/tags", dependencies=[Depends(get_api_key)])
+    def save_tag(data: dict):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            p = dm.placeholder
+            if dm.is_postgres:
+                cursor.execute(f"INSERT INTO search_tags (tag, description) VALUES ({p}, {p}) ON CONFLICT(tag) DO UPDATE SET description=EXCLUDED.description", (data["tag"], data.get("description", "")))
+            else:
+                cursor.execute(f"INSERT OR REPLACE INTO search_tags (tag, description) VALUES ({p}, {p})", (data["tag"], data.get("description", "")))
+            conn.commit()
+            return {"status": "success"}
+        finally: conn.close()
+
+    @app.delete("/api/admin/tags/{tid}", dependencies=[Depends(get_api_key)])
+    def delete_tag(tid: int):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM search_tags WHERE id = {dm.placeholder}", (tid,))
+            conn.commit()
+            return {"status": "success"}
+        finally: conn.close()
+
+    @app.get("/api/admin/metadata", dependencies=[Depends(get_api_key)])
+    def get_metadata():
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, key, value, description FROM system_metadata ORDER BY key")
+            return [{"id": r[0], "key": r[1], "value": r[2], "description": r[3]} for r in cursor.fetchall()]
+        finally: conn.close()
+
+    @app.post("/api/admin/metadata", dependencies=[Depends(get_api_key)])
+    def save_metadata(data: dict):
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            p = dm.placeholder
+            if dm.is_postgres:
+                cursor.execute(f"INSERT INTO system_metadata (key, value, description) VALUES ({p}, {p}, {p}) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, description=EXCLUDED.description, last_updated=CURRENT_TIMESTAMP", (data["key"], data["value"], data.get("description", "")))
+            else:
+                cursor.execute(f"INSERT OR REPLACE INTO system_metadata (key, value, description, last_updated) VALUES ({p}, {p}, {p}, CURRENT_TIMESTAMP)", (data["key"], data["value"], data.get("description", "")))
+            conn.commit()
+            return {"status": "success"}
+        finally: conn.close()
+
+    @app.post("/api/leads/bulk-update")
+    def bulk_update_leads(payload: dict):
+        """Perform bulk actions on leads."""
+        lead_ids = payload.get("ids", [])
+        action = payload.get("action")
+        if not lead_ids or not action:
+            raise HTTPException(status_code=400, detail="Missing ids or action")
+        
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            if action == "high_value":
+                if dm.is_postgres:
+                    cursor.execute("UPDATE leads SET high_value = TRUE WHERE id = ANY(%s)", (lead_ids,))
+                else:
+                    placeholders = ', '.join(['?'] * len(lead_ids))
+                    cursor.execute(f"UPDATE leads SET high_value = 1 WHERE id IN ({placeholders})", lead_ids)
+            elif action == "delete":
+                if dm.is_postgres:
+                    cursor.execute("DELETE FROM leads WHERE id = ANY(%s)", (lead_ids,))
+                else:
+                    placeholders = ', '.join(['?'] * len(lead_ids))
+                    cursor.execute(f"DELETE FROM leads WHERE id IN ({placeholders})", lead_ids)
+            elif action == "archive":
+                if dm.is_postgres:
+                    cursor.execute("UPDATE leads SET status = 'archived' WHERE id = ANY(%s)", (lead_ids,))
+                else:
+                    placeholders = ', '.join(['?'] * len(lead_ids))
+                    cursor.execute(f"UPDATE leads SET status = 'archived' WHERE id IN ({placeholders})", lead_ids)
+            elif action == "mark_contacted":
+                if dm.is_postgres:
+                    cursor.execute("UPDATE leads SET status = 'contacted' WHERE id = ANY(%s)", (lead_ids,))
+                else:
+                    placeholders = ', '.join(['?'] * len(lead_ids))
+                    cursor.execute(f"UPDATE leads SET status = 'contacted' WHERE id IN ({placeholders})", lead_ids)
+            
+            conn.commit()
+            conn.close()
+            return {"status": "success", "message": f"Applied {action} to {len(lead_ids)} leads"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.post("/api/leads/mark-high-value")
+    def mark_high_value(payload: dict):
+        lead_id = payload.get("id")
+        if not lead_id: raise HTTPException(status_code=400, detail="Missing id")
+        dm = DataManager()
+        try:
+            conn = dm.get_connection()
+            cursor = conn.cursor()
+            if dm.is_postgres:
+                cursor.execute("UPDATE leads SET high_value = TRUE WHERE id = %s", (lead_id,))
+            else:
+                cursor.execute("UPDATE leads SET high_value = 1 WHERE id = ?", (lead_id,))
+            conn.commit()
+            conn.close()
+            return {"status": "success"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     @app.websocket("/ws/logs")
     async def logs(ws: WebSocket):
         await ws.accept()
-        await ws.send_text("agent: connected")
+        await ws.send_text("System: Connected to intelligence stream")
+        
+        last_sent_index = 0
         try:
             while True:
-                await ws.send_text(f"tick:{time.time()}")
-                await asyncio.sleep(1)
+                # Get snapshot of bot manager output
+                snapshot = BOT_MANAGER.snapshot()
+                tail = snapshot.get("output_tail", [])
+                
+                # Send new lines since last check
+                if len(tail) > last_sent_index:
+                    for i in range(last_sent_index, len(tail)):
+                        await ws.send_text(tail[i])
+                    last_sent_index = len(tail)
+                elif len(tail) < last_sent_index:
+                    # Tail was cleared or rotated
+                    last_sent_index = 0
+                
+                # Heartbeat or status update if idle
+                if BOT_MANAGER.state.get("status") == "running":
+                    await ws.send_text(f"Runner: {BOT_MANAGER.state.get('message')}")
+                
+                await asyncio.sleep(2)
         except Exception:
             pass
 
@@ -714,6 +1704,32 @@ def _safe_int(value, default=0):
         return int(float(value))
     except Exception:
         return default
+
+
+def _generic_outreach_result(lead_context):
+    name = lead_context.get("business_name") or "your business"
+    first_name = lead_context.get("first_name")
+    niche = lead_context.get("niche") or "business"
+    city = lead_context.get("city") or "your area"
+    audit_issues = lead_context.get("audit_issues") or []
+    observation = audit_issues[0] if audit_issues else "there may be a few easy improvements worth reviewing"
+    greeting_name = first_name or "there"
+    sender_name = getattr(config, "SENDER_NAME", "Promise")
+    subject = f"Quick idea for {name}"
+    body = (
+        f"Hi {greeting_name},\n\n"
+        f"I took a quick look at {name} and noticed {observation.lower()}.\n"
+        f"I help {niche.lower()} businesses in {city} improve their website conversion flow and follow-up systems.\n"
+        "If you'd like, I can send over a short audit with a few practical fixes.\n\n"
+        f"Best,\n{sender_name}"
+    )
+    return {
+        "subject": subject,
+        "email": body,
+        "provider": "generic_fallback",
+        "persona": "Generic Outreach",
+        "hook_type": "generic_fallback",
+    }
 
 
 def has_website(lead):
@@ -811,6 +1827,7 @@ def main():
         print(f"Starting API server on port {config.FASTAPI_PORT}...")
         uvicorn.run(app, host="0.0.0.0", port=config.FASTAPI_PORT)
         return
+    _load_runtime_dependencies()
     if args.signals:
         dm = DataManager()
         smtp_accounts = config.get_smtp_accounts()
@@ -1275,8 +2292,23 @@ def main():
                         emails = await snov_domain_emails(d, token, titles)
                     for em in emails[:1]:
                         if mailer.validate_email_deep(em, smtp_probe=False):
-                            obs = "the website could benefit from some optimization opportunities"
-                            subj, body = llm_helper.generate_email_master(name, "business", "online", obs)
+                            lead_data = {
+                                "business_name": name,
+                                "industry": "business",
+                                "city": None,
+                                "website": d,
+                                "audit_issues": [],
+                                "pagespeed_score": None,
+                                "first_name": "there",
+                                "description": "",
+                                "reviews": [],
+                                "competitors": [],
+                                "rating": None,
+                                "review_count": None,
+                            }
+                            result = run_pipeline(lead_data)
+                            subj = result.get("subject", f"Quick note about {name}")
+                            body = result.get("email", "")
                             if getattr(config, "DRY_RUN", False):
                                 log("dry_send_preview", to=em, subject=subj, body_preview=body[:200])
                                 dm.record_email_event(name, "dry_preview", {"to": em})
@@ -1289,14 +2321,23 @@ def main():
     if args.dry_run:
         config.DRY_RUN = True
     dm = DataManager()
+    try:
+        db_storage = dm.run_storage_maintenance(force=False)
+        local_storage = run_local_storage_maintenance()
+        log("storage_maintenance", database=db_storage.get("maintenance"), local=local_storage.get("maintenance"))
+    except Exception as storage_error:
+        log("storage_maintenance_failed", error=str(storage_error))
     smtp_accounts = config.get_smtp_accounts()
     smtp_pool = build_smtp_pool(smtp_accounts)
     mailers = list(smtp_pool.mailers)
     if not mailers:
-        print("[SMTP] No SMTP accounts configured. Switching to DRY_RUN mode.")
-        config.DRY_RUN = True
-        mailers = [Mailer("", "", config.SMTP_SERVER, config.SMTP_PORT)]
-        smtp_pool = None
+        if config.DRY_RUN or getattr(config, "ALLOW_AUTO_DRY_RUN_FALLBACK", False):
+            print("[SMTP] No SMTP accounts configured. Running in preview mode.")
+            config.DRY_RUN = True
+            mailers = [Mailer("", "", config.SMTP_SERVER, config.SMTP_PORT)]
+            smtp_pool = None
+        else:
+            raise RuntimeError("No SMTP accounts configured. Refusing to auto-fallback to DRY_RUN in live mode.")
     mailer = smtp_pool.peek_mailer() if smtp_pool else mailers[0]
     
     # Initialize Scrapers
@@ -1311,14 +2352,29 @@ def main():
         log("config_warnings", issues=optional_issues)
     if blocking_issues and not config.DRY_RUN:
         log("config_issues", issues=blocking_issues)
-        config.DRY_RUN = True
+        if getattr(config, "ALLOW_AUTO_DRY_RUN_FALLBACK", False):
+            config.DRY_RUN = True
+        else:
+            raise RuntimeError("Blocking configuration issues prevent live sending: " + ", ".join(blocking_issues))
     
-    driver = scraper.get_driver()
+    if not args.batch:
+        try:
+            driver = scraper.get_driver()
+            if not driver:
+                print("WARNING: Failed to initialize browser driver. Scrapers requiring a browser may fail.")
+        except Exception as e:
+            print(f"WARNING: Error initializing browser driver: {e}")
+            driver = None
+    else:
+        driver = None
     if not config.DRY_RUN:
         working_mailer = smtp_pool.get_working_mailer(test_login=True) if smtp_pool else None
         if not working_mailer:
-            print("[SMTP] Falling back to DRY_RUN due to connection failure.")
-            config.DRY_RUN = True
+            if getattr(config, "ALLOW_AUTO_DRY_RUN_FALLBACK", False):
+                print("[SMTP] Falling back to DRY_RUN due to connection failure.")
+                config.DRY_RUN = True
+            else:
+                raise RuntimeError("SMTP connection test failed. Live sending is blocked until a working account is configured.")
         else:
             mailer = working_mailer
     
@@ -1329,21 +2385,7 @@ def main():
     # 3. Query Selection (Global Loop)
     if args.batch:
         print("\n--- BATCH MODE: Processing existing leads from database ---")
-        import sqlite3
-        conn = dm.get_connection()
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT * FROM leads
-            WHERE email IS NOT NULL
-              AND email != ''
-              AND COALESCE(sequence_stage, 'initial') = 'initial'
-              AND COALESCE(status, 'scraped') NOT IN ('emailed', 'manual_queue', 'low_priority', 'no_contact', 'not_interested', 'bounced', 'appointment_booked', 'sale_closed', 'blacklisted', 'completed')
-              AND (next_action_due IS NULL OR next_action_due <= datetime('now'))
-            LIMIT ?
-        """, (args.limit or 20,))
-        leads_sorted_batch = [dict(row) for row in cur.fetchall()]
-        conn.close()
+        leads_sorted_batch = dm.get_pending_leads(limit=args.limit or 20, include_followups=False, initial_only=True)
         print(f"Found {len(leads_sorted_batch)} candidate leads in database.")
         
         # We simulate a single "batch" query loop
@@ -1369,10 +2411,25 @@ def main():
         else:
             queries = config.get_search_queries()
     print(f"Loaded {len(queries)} global search queries.")
+    sys.stdout.flush()
     
     session_limit = args.session_queries if args.session_queries else config.SESSION_QUERIES
+    print(f"DEBUG: session_limit={session_limit}")
+    sys.stdout.flush()
     session_queries = random.sample(queries, min(session_limit, len(queries)))
+    print(f"DEBUG: session_queries={session_queries}")
+    sys.stdout.flush()
+    pending_delivery_leads = []
+    if not args.batch and getattr(config, "BOT_PROCESS_PENDING_FIRST", True):
+        print("DEBUG: Checking for pending leads...")
+        sys.stdout.flush()
+        pending_delivery_leads = dm.get_pending_leads(limit=args.limit or max(20, config.BATCH_SIZE))
+        if pending_delivery_leads:
+            print(f"Loaded {len(pending_delivery_leads)} pending lead(s) from PostgreSQL for delivery before scraping.")
+            session_queries = ["Pending Queue"] + session_queries
     
+    print("DEBUG: Entering query loop...")
+    sys.stdout.flush()
     emails_sent_in_batch = 0
     for query in session_queries:
         if daily_count >= config.MAX_DAILY_ACTIONS:
@@ -1380,20 +2437,21 @@ def main():
             break
             
         print(f"\n--- Campaign: {query} ---")
+        batch_mode = args.batch or query == "Pending Queue"
         
-        if args.batch:
-            leads_raw = leads_sorted_batch
+        if batch_mode:
+            leads_raw = leads_sorted_batch if args.batch else pending_delivery_leads
         else:
             # Parallel Scraping
             leads_raw = run_parallel_scraping(query, scraper, driver, yelp_api, osm)
         
         # Fallback to Bing/YP if ABSOLUTELY nothing found (Sequential fallback still useful here as last resort)
-        if len(leads_raw) == 0 and not args.batch:
+        if len(leads_raw) == 0 and not batch_mode:
              print("All primary scrapers failed. Trying legacy fallbacks...")
              # ... (Keep legacy fallback logic if desired, or assume parallel covers it)
         
         # 4. Priority Sorting: No-website businesses first
-        if config.PRIORITIZE_NO_WEBSITE and not args.batch:
+        if config.PRIORITIZE_NO_WEBSITE and not batch_mode:
             leads_no_site = [l for l in leads_raw if classify_lead(l) == "no_website"]
             leads_with_site = [l for l in leads_raw if classify_lead(l) == "has_website"]
             leads_sorted = leads_no_site + leads_with_site
@@ -1430,8 +2488,8 @@ def main():
             description = lead_info.get('description')
             sample_reviews = lead_info.get('sample_reviews')
             
-            # Check DB existence (Skip if in batch mode)
-            if not args.batch and dm.lead_exists(name, website):
+            # Check DB existence (Skip only for fresh scrape mode)
+            if not batch_mode and dm.lead_exists(name, website):
                 continue
             
             # --- SAFETY THROTTLES (from send_10_emails.py) ---
@@ -1464,7 +2522,7 @@ def main():
             # Duplicate Detection: Check if website belongs to parent company
             parent_company_id = None
             normalized_website = canonicalize_website(website) if website else None
-            if normalized_website and dm.is_parent_company(normalized_website):
+            if normalized_website and dm.is_parent_company_emailed(normalized_website):
                 print(f"  -> Duplicate website detected: {website}")
                 parent_company_id = dm.get_parent_company_id(normalized_website)
                 dm.increment_parent_company_count(normalized_website)
@@ -1518,9 +2576,20 @@ def main():
             else:
                 strategy = "audit"
                 print("  -> Strategy: AUDIT (Redesign Pitch)")
-                
+                email_site = lead_info.get('email')
+                 
+                # BATCH MODE BYPASS: Use stored lead data when an email is already known.
+                if args.batch and lead_info.get('email'):
+                    print("  -> Using existing email from database for batch delivery.")
+                    audit_issues = [i.strip() for i in str(lead_info.get('audit_issues') or "").split(";") if i.strip()]
+                    web_signals = lead_info.get('website_signals') or {}
+                    if isinstance(web_signals, str):
+                        try:
+                            web_signals = json.loads(web_signals)
+                        except Exception:
+                            web_signals = {}
                 # BATCH MODE BYPASS: Reuse existing audit if available
-                if args.batch and lead_info.get('audit_issues'):
+                elif args.batch and lead_info.get('audit_issues'):
                     print("  -> Using existing audit data from database.")
                     audit_issues = [i.strip() for i in str(lead_info.get('audit_issues')).split(";") if i.strip()]
                     web_signals = lead_info.get('website_signals') or {}
@@ -1549,7 +2618,7 @@ def main():
                 
                 # ENHANCED AUDIT (PageSpeed + Screenshot)
                 screenshot_path = None
-                if not (args.batch and lead_info.get('pagespeed_score')) and getattr(config, "PAGESPEED_API_KEY", None):
+                if not (args.batch and lead_info.get('email')) and not (args.batch and lead_info.get('pagespeed_score')) and getattr(config, "PAGESPEED_API_KEY", None):
                     try:
                         import asyncio
                         # Create new event loop for async call if needed, or run
@@ -1568,43 +2637,47 @@ def main():
                 # FREEDOM SEARCH (Find CEO)
                 # Combine site email with finding decision maker
                 # Use FreedomSearch (reusing driver)
-                fs = FreedomSearch(driver) 
-                # Parse domain
-                from urllib.parse import urlparse
-                domain = urlparse(website).netloc.replace("www.", "")
-                
                 ceo_name = None
                 email_person = None
                 
-                if not (args.batch and lead_info.get('email')) and (args.audit or not email_site):
-                    print("  -> Harnessing Freedom Search for CEO...")
-                    ceo_name, ceo_profile = fs.find_ceo(name, lead_info.get('city'))
-                    if ceo_name:
-                        print(f"  -> Found CEO: {ceo_name}")
-                        first_name = ceo_name.split()[0]
-                        
-                        # Guess emails
-                        guessed = fs.guess_emails(ceo_name, domain)
-                        for g in guessed:
-                            if fs.verify_email_dns(g): # Simple DNS check
-                                email_person = g
-                                print(f"  -> Guessed & Verified Email: {email_person}")
-                                break
-                    else:
-                         # Fallback to team page scraping
-                         print("  -> Google X-Ray failed. Trying Team Page...")
-                         contacts = fs.scrape_team_page(website)
-                         if contacts:
-                             # Pick first
-                             c = contacts[0]
-                             email_person = c.get('email')
-                             print(f"  -> Found contact on Team/About page: {email_person}")
+                if not (args.batch and lead_info.get('email')):
+                    fs = FreedomSearch(driver)
+                    # Parse domain
+                    from urllib.parse import urlparse
+                    domain = urlparse(website).netloc.replace("www.", "")
+
+                    if args.audit or not email_site:
+                        print("  -> Harnessing Freedom Search for CEO...")
+                        ceo_name, ceo_profile = fs.find_ceo(name, lead_info.get('city'))
+                        if ceo_name:
+                            print(f"  -> Found CEO: {ceo_name}")
+                            first_name = ceo_name.split()[0]
+
+                            # Guess emails
+                            guessed = fs.guess_emails(ceo_name, domain)
+                            for g in guessed:
+                                if fs.verify_email_dns(g): # Simple DNS check
+                                    email_person = g
+                                    print(f"  -> Guessed & Verified Email: {email_person}")
+                                    break
+                        else:
+                             # Fallback to team page scraping
+                             print("  -> Google X-Ray failed. Trying Team Page...")
+                             contacts = fs.scrape_team_page(website)
+                             if contacts:
+                                 # Pick first
+                                 c = contacts[0]
+                                 email_person = c.get('email')
+                                 print(f"  -> Found contact on Team/About page: {email_person}")
                     
                 email = email or email_person or email_site
                 
                 # Register parent
-                if normalized_website and not dm.is_parent_company(normalized_website):
-                    parent_company_id = dm.create_parent_company(normalized_website, name)
+                if normalized_website:
+                    if dm.is_parent_company(normalized_website):
+                        parent_company_id = dm.get_parent_company_id(normalized_website)
+                    else:
+                        parent_company_id = dm.create_parent_company(normalized_website, name)
                     lead_info['parent_company_id'] = parent_company_id
 
                 if not description:
@@ -1772,7 +2845,10 @@ def main():
                 )
             
             # 6. Email Generation (with personalization)
-            time.sleep(random.uniform(1.2, 2.8))
+            pre_send_delay_min = max(0.0, float(getattr(config, "PRE_SEND_DELAY_MIN_SECONDS", 0)))
+            pre_send_delay_max = max(pre_send_delay_min, float(getattr(config, "PRE_SEND_DELAY_MAX_SECONDS", pre_send_delay_min)))
+            if pre_send_delay_max > 0:
+                time.sleep(random.uniform(pre_send_delay_min, pre_send_delay_max))
             
             # Parse reviews from JSON
             import json
@@ -1864,23 +2940,46 @@ def main():
                 retry_event = "website_prompt_quality_retry"
 
             outreach_result = None
-            for attempt in range(3):
+            llm_attempts = max(1, int(getattr(config, "LLM_MAX_ATTEMPTS", 1)))
+            for attempt in range(llm_attempts):
                 try:
                     outreach_result = llm_helper.generate_maps_cold_email(lead_context)
                     break
                 except Exception as e:
-                    if attempt < 2:
+                    if attempt < llm_attempts - 1:
                         log("llm_generation_retry", name=name, attempt=attempt + 1, error=str(e))
                         continue
                     log("llm_generation_failed", name=name, error=str(e))
-                    dm.record_email_event(name, "llm_generation_failed", {"error": str(e), "attempts": 3})
+                    dm.record_email_event(name, "llm_generation_failed", {"error": str(e), "attempts": llm_attempts})
                     outreach_result = None
             if outreach_result is None:
-                continue
+                outreach_result = _generic_outreach_result(lead_context)
+                log("llm_generation_fallback", name=name, provider=outreach_result.get("provider"))
+                dm.record_email_event(
+                    name,
+                    "llm_generation_fallback",
+                    {"provider": outreach_result.get("provider")},
+                )
 
             subject = outreach_result.get("subject") or f"Quick note about {name}"
             body = outreach_result.get("email") or ""
-            quality_result = llm_helper.evaluate_structured_email_quality(body, lead_context, lead_type == "has_website", persona_name=outreach_result.get("persona"))
+            if outreach_result.get("provider") == "generic_fallback":
+                quality_result = {"issues": [], "score": None}
+            else:
+                quality_result = llm_helper.evaluate_structured_email_quality(body, lead_context, lead_type == "has_website", persona_name=outreach_result.get("persona"))
+            
+            # Quality Gate: Skip if score is too low
+            quality_score = quality_result.get("score")
+            if quality_score is not None and quality_score < 60:
+                print(f"  [QA] Email quality too low (score={quality_score}). Skipping {name}.")
+                dm.record_email_event(name, "llm_quality_rejected", {
+                    "provider": outreach_result.get("provider"),
+                    "persona": outreach_result.get("persona"),
+                    "score": quality_score,
+                    "issues": quality_result.get("issues"),
+                })
+                continue
+
             if quality_result.get("issues"):
                 dm.record_email_event(name, "llm_quality_warning", {
                     "provider": outreach_result.get("provider"),
@@ -2063,7 +3162,7 @@ def main():
 
                  # Batch Logic
                  emails_sent_in_batch += 1
-                 if emails_sent_in_batch >= config.BATCH_SIZE:
+                 if getattr(config, "ENABLE_BATCH_REST", False) and emails_sent_in_batch >= config.BATCH_SIZE:
                      print(f"\n[Pro Mode] Batch limit ({config.BATCH_SIZE}) reached. Resting for {config.BATCH_DELAY_MINUTES} minutes...")
                      print("This 'rest' period is critical for avoiding spam filters.")
                      time.sleep(config.BATCH_DELAY_MINUTES * 60)
@@ -2128,4 +3227,6 @@ def main():
     print("Session finished.")
 
 if __name__ == "__main__":
+    import sys
+    print(f"DEBUG: Executing main block with args: {sys.argv}")
     main()

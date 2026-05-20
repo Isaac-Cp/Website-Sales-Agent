@@ -1,0 +1,276 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* 8pt Spacing Grid */
+  --s-0: 0.25rem; /* 4px */
+  --s-1: 0.5rem;  /* 8px */
+  --s-2: 1rem;    /* 16px */
+  --s-3: 1.5rem;  /* 24px */
+  --s-4: 2rem;    /* 32px */
+  --s-5: 2.5rem;  /* 40px */
+  --s-6: 3rem;    /* 48px */
+  --s-8: 4rem;    /* 64px */
+  --s-10: 5rem;   /* 80px */
+  --s-12: 6rem;   /* 96px */
+
+  /* Standardized Typography Scale */
+  --fs-xs: clamp(0.7rem, 0.65rem + 0.2vw, 0.75rem);   /* 11px - 12px */
+  --fs-sm: clamp(0.8rem, 0.75rem + 0.2vw, 0.875rem); /* 13px - 14px */
+  --fs-base: clamp(0.9rem, 0.85rem + 0.2vw, 1rem);    /* 14.5px - 16px */
+  --fs-lg: clamp(1.1rem, 1rem + 0.4vw, 1.25rem);      /* 18px - 20px */
+  --fs-xl: clamp(1.3rem, 1.2rem + 0.6vw, 1.6rem);     /* 21px - 25px */
+  --fs-2xl: clamp(1.6rem, 1.4rem + 1vw, 2.2rem);      /* 25px - 35px */
+  --fs-display: clamp(2.5rem, 2rem + 3vw, 4.5rem);    /* 40px - 72px */
+
+  /* Line Heights */
+  --lh-tight: 1.1;
+  --lh-snug: 1.3;
+  --lh-base: 1.6;
+  --lh-relaxed: 1.8;
+
+  /* Border Radii - Enhanced for Claymorphism */
+  --r-xs: 0.5rem;
+  --r-sm: 0.75rem;
+  --r-md: 1.5rem;
+  --r-lg: 2.5rem;  /* Min 24px as requested */
+  --r-xl: 3.5rem;
+  --r-full: 9999px;
+
+  /* Animation Tokens */
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --t-fast: 0.2s;
+  --t-base: 0.4s;
+  --t-slow: 0.6s;
+
+  /* Global Shadows */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 10px 24px rgba(0, 0, 0, 0.18);
+  --shadow-lg: 0 18px 40px rgba(0, 0, 0, 0.22);
+}
+
+[data-theme="dark"] {
+  --bg: #0f121a;
+  --bg-alt: #161a24;
+  --bg-subtle: #1c2230;
+  --ink: #f8fafc;        
+  --ink-dim: #cbd5e1;    
+  --muted: #8492a6;      
+  --muted-dim: #606f7b;  
+  --line: rgba(255, 255, 255, 0.05);
+  --line-strong: rgba(255, 255, 255, 0.1);
+  
+  /* Muted Earth/Pastel Palette for Claymorphism */
+  --brand: #7ab7ff;       /* Soft Pastel Blue */
+  --brand-dim: #5c9ee5;
+  --brand-glow: rgba(122, 183, 255, 0.15);
+  --accent: #f3a683;      /* Muted Peach/Sand */
+  --success: #82ccdd;     /* Soft Pastel Teal */
+  --error: #e77f67;       /* Muted Coral */
+  --purple: #cf9fff;      /* Soft Pastel Purple */
+  
+  --panel: rgba(22, 26, 36, 0.9);
+  --panel-strong: rgba(28, 34, 48, 0.95);
+  --glass: rgba(22, 26, 36, 0.8);
+  --glass-hover: rgba(30, 36, 50, 0.9);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-highlight: rgba(255, 255, 255, 0.08);
+  
+  /* Claymorphism Tokens - Enhanced Multi-layered */
+  --clay-bg: var(--card-bg);
+  --clay-shadow-outer: 12px 12px 24px rgba(0, 0, 0, 0.5), -8px -8px 16px rgba(255, 255, 255, 0.01);
+  --clay-shadow-inner: inset 8px 8px 16px rgba(0, 0, 0, 0.4), inset -8px -8px 16px rgba(255, 255, 255, 0.04);
+  --clay-glow: inset 0 0 25px rgba(122, 183, 255, 0.04);
+  --clay-highlight: inset 0 2px 2px rgba(255, 255, 255, 0.08);
+  --clay-edge: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 50%, rgba(0, 0, 0, 0.05) 100%);
+
+  --card-bg: #161b29;
+}
+
+[data-theme="light"] {
+  --bg: #f0f4f8;
+  --bg-alt: #ffffff;
+  --bg-subtle: #e2e8f0;
+  --ink: #1a202c;
+  --ink-dim: #2d3748;
+  --muted: #718096;
+  --muted-dim: #a0aec0;
+  --line: rgba(15, 23, 42, 0.06);
+  --line-strong: rgba(15, 23, 42, 0.1);
+  
+  /* Muted Earth/Pastel Palette for Claymorphism */
+  --brand: #4a90e2;       /* Muted Sky Blue */
+  --brand-dim: #357abd;
+  --brand-glow: rgba(74, 144, 226, 0.1);
+  --accent: #e67e22;      /* Muted Ochre */
+  --success: #27ae60;     /* Soft Forest Green */
+  --error: #c0392b;       /* Muted Brick Red */
+  --purple: #8e44ad;      /* Muted Plum */
+  
+  --panel: rgba(255, 255, 255, 0.92);
+  --panel-strong: rgba(255, 255, 255, 1);
+  --glass: rgba(255, 255, 255, 0.8);
+  --glass-hover: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(15, 23, 42, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 1);
+  
+  /* Claymorphism Tokens - Enhanced Multi-layered */
+  --clay-bg: var(--card-bg);
+  --clay-shadow-outer: 12px 12px 24px rgba(148, 163, 184, 0.25), -8px -8px 16px rgba(255, 255, 255, 0.7);
+  --clay-shadow-inner: inset 8px 8px 16px rgba(148, 163, 184, 0.35), inset -8px -8px 16px rgba(255, 255, 255, 1);
+  --clay-glow: inset 0 0 25px rgba(74, 144, 226, 0.03);
+  --clay-highlight: inset 0 2px 2px rgba(255, 255, 255, 0.8);
+  --clay-edge: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.4) 50%, rgba(148, 163, 184, 0.2) 100%);
+
+  --card-bg: #ffffff;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    overflow-y: scroll;
+  }
+
+  body {
+    @apply bg-[var(--bg)] text-[var(--ink)] transition-colors duration-[var(--t-base)] ease-[var(--ease)];
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: var(--fs-base);
+    line-height: 1.6;
+    letter-spacing: -0.015em;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Outfit', sans-serif;
+    @apply font-bold tracking-tight;
+  }
+
+  /* Accessibility: Better Focus States */
+  :focus-visible {
+    @apply outline-none ring-2 ring-[var(--brand)] ring-offset-2 ring-offset-[var(--bg)] transition-all;
+  }
+
+  ::selection {
+    @apply bg-[var(--brand)] text-white;
+  }
+}
+
+@layer components {
+  /* Tooltip Styles */
+  .nn-tooltip {
+    @apply invisible absolute z-[1000] px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-white bg-black/90 backdrop-blur-md rounded-lg opacity-0 transition-all duration-300;
+    bottom: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%) translateY(5px);
+    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+
+  .has-tooltip:hover .nn-tooltip {
+    @apply visible opacity-100;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* Claymorphism Card - Enhanced 3D Aesthetic */
+  .clay-card {
+    background: var(--clay-bg);
+    border-radius: var(--r-lg);
+    /* Multi-layered shadow stacking for base elevation */
+    box-shadow: 
+      var(--clay-shadow-outer), 
+      var(--clay-shadow-inner), 
+      var(--clay-glow),
+      var(--clay-highlight);
+    /* Gradient edge treatment instead of solid borders */
+    border: none;
+    position: relative;
+    overflow: hidden;
+    perspective: 1500px;
+    transform-style: preserve-3d;
+    transition: all 300ms ease-in-out;
+  }
+
+  /* Highlight/Light Reflection Overlay */
+  .clay-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--clay-edge);
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.8;
+  }
+
+  /* Hover State: 30% Elevation Increase + Scale */
+  .clay-card:hover {
+    transform: translateY(-15px) scale(1.02) rotateX(2deg);
+    box-shadow: 
+      18px 18px 36px rgba(0, 0, 0, 0.4), 
+      var(--clay-shadow-inner), 
+      var(--clay-glow),
+      var(--clay-highlight);
+    z-index: 10;
+  }
+
+  /* Active State: Subtle compression */
+  .clay-card:active {
+    transform: scale(0.98) translateY(2px);
+    box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.3), var(--clay-shadow-inner);
+  }
+
+  /* Progressive Depth Scaling for Nested Elements */
+  .clay-card > * {
+    position: relative;
+    z-index: 2;
+  }
+
+  /* Glass Panel */
+  .glass-panel {
+    background: var(--panel);
+    @apply backdrop-blur-2xl border border-[var(--glass-border)] rounded-[var(--r-lg)] transition-all duration-[var(--t-base)] ease-[var(--ease)];
+    box-shadow: var(--shadow-md);
+  }
+
+  /* 3D Depth Utilities */
+  .depth-1 { transform: translateZ(10px); }
+  .depth-2 { transform: translateZ(20px); }
+  .depth-3 { transform: translateZ(30px); }
+
+  /* Smooth Scroll Helper */
+  .smooth-scroll-container {
+    overflow-x: hidden;
+    overflow-y: auto;
+    height: 100vh;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Primary Button */
+  .btn-primary {
+    @apply relative overflow-hidden bg-gradient-to-br from-[var(--brand)] to-[var(--brand-dim)] text-white rounded-[var(--r-md)] transition-all duration-[var(--t-base)] active:scale-95 hover:brightness-110 shadow-lg;
+    box-shadow: 0 8px 32px var(--brand-glow);
+  }
+
+  .btn-primary::after {
+    content: '';
+    @apply absolute inset-0 bg-white/20 opacity-0 transition-opacity;
+  }
+
+  .btn-primary:hover::after {
+    @apply opacity-100;
+  }
+}
+
+/* Reduced Motion Fallbacks */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .clay-card:hover {
+    transform: none !important;
+  }
+}
